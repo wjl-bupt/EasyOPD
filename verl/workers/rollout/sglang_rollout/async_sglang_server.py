@@ -28,7 +28,6 @@ from ray.actor import ActorHandle
 from sglang.srt.entrypoints.http_server import (
     ServerArgs,
     _GlobalState,
-    _launch_subprocesses,
     app,
     set_global_state,
 )
@@ -263,7 +262,20 @@ class SGLangHttpServer:
         sglang.srt.entrypoints.engine._set_envs_and_config = _set_envs_and_config
         os.environ["SGLANG_BLOCK_NONZERO_RANK_CHILDREN"] = "0"
         server_args = ServerArgs(**args)
-        if version.parse(sglang.__version__) >= version.parse("0.5.7"):
+        # For SGLang main branch or version >= 0.5.10
+        # The latest main branch of SGLang has wrapped the _launch_subprocesses function inside the Engine class
+        if version.parse(sglang.__version__) >= version.parse("0.5.10"):
+            from sglang.srt.entrypoints.http_server import Engine
+
+            self.tokenizer_manager, self.template_manager, self.scheduler_info, *_ = Engine._launch_subprocesses(
+                server_args=server_args,
+                init_tokenizer_manager_func=sglang.srt.entrypoints.engine.init_tokenizer_manager,
+                run_scheduler_process_func=sglang.srt.entrypoints.engine.run_scheduler_process,
+                run_detokenizer_process_func=sglang.srt.entrypoints.engine.run_detokenizer_process,
+            )
+        elif version.parse(sglang.__version__) >= version.parse("0.5.7"):
+            from sglang.srt.entrypoints.http_server import _launch_subprocesses
+
             self.tokenizer_manager, self.template_manager, self.scheduler_info, *_ = _launch_subprocesses(
                 server_args=server_args,
                 init_tokenizer_manager_func=sglang.srt.entrypoints.engine.init_tokenizer_manager,
@@ -271,6 +283,8 @@ class SGLangHttpServer:
                 run_detokenizer_process_func=sglang.srt.entrypoints.engine.run_detokenizer_process,
             )
         else:
+            from sglang.srt.entrypoints.http_server import _launch_subprocesses
+
             self.tokenizer_manager, self.template_manager, self.scheduler_info, *_ = _launch_subprocesses(
                 server_args=server_args
             )
