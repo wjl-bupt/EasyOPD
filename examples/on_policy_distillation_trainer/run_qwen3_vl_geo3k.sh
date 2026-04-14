@@ -87,7 +87,7 @@ DISTILLATION=(
     distillation.teacher_model.inference.max_model_len=$MAX_NUM_TOKENS
     distillation.teacher_model.inference.max_num_batched_tokens=$MAX_NUM_TOKENS
     distillation.teacher_model.inference.max_num_seqs=$MAX_NUM_TOKENS
-    +distillation.teacher_model.inference.engine_kwargs.vllm.disable_mm_preprocessor_cache=True
+    +distillation.teacher_model.inference.engine_kwargs.vllm.mm_processor_cache_gb=0
     distillation.distillation_loss.loss_mode=$DISTILLATION_LOSS_MODE
     distillation.distillation_loss.topk=64
     distillation.distillation_loss.use_task_rewards=False
@@ -119,7 +119,7 @@ ROLLOUT=(
     actor_rollout_ref.rollout.max_num_batched_tokens=$MAX_NUM_TOKENS
     actor_rollout_ref.rollout.max_num_seqs=$MAX_NUM_TOKENS
     actor_rollout_ref.rollout.n=1
-    +actor_rollout_ref.rollout.engine_kwargs.vllm.disable_mm_preprocessor_cache=True
+    +actor_rollout_ref.rollout.engine_kwargs.vllm.mm_processor_cache_gb=0
 )
 
 ALGORITHM=(
