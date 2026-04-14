@@ -131,9 +131,7 @@ run, the most common useful combinations are:
     "scope": [],
     "list": [],
     "data_mode": ["all"],
-    "bench_path": "/home/bench_data_dump",
-    "summary_mode": "md5",
-    "diff_nums": 5
+    "summary_mode": "statistics"
   }
 }
 ```
