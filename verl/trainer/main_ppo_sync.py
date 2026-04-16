@@ -23,6 +23,7 @@ Differs from original PPO trainer in main_ppo.py:
 
 import asyncio
 import logging
+import math
 import os
 import threading
 import time
@@ -71,6 +72,7 @@ from verl.trainer.ppo.metric_utils import (
     compute_variance_proxy_metrics,
     process_validation_metrics,
 )
+from verl.trainer.ppo.padding_utils import upsample_batch_to_divisible_size
 from verl.trainer.ppo.ray_trainer import apply_kl_penalty, compute_advantage
 from verl.trainer.ppo.rollout_corr_helper import compute_rollout_correction_and_add_to_batch
 from verl.trainer.ppo.utils import Role, WorkerType, need_critic, need_reference_policy, need_teacher_policy
@@ -995,11 +997,27 @@ class PPOTrainer:
         # TODO: add reward model
         raise NotImplementedError
 
+    def _get_required_batch_multiple(self, dp_size: int) -> int:
+        """Return the global batch multiple required by downstream train steps(e.g. critics, actors)."""
+        required_multiple = dp_size
+
+        # If enabled with critic training, the batch should align with critic PPO mini-batches.
+        if self.use_critic:
+            critic_global_mini_batch_size = self.config.critic.ppo_mini_batch_size
+            critic_global_mini_batch_size *= self.config.actor_rollout_ref.rollout.n
+            required_multiple = math.lcm(required_multiple, critic_global_mini_batch_size)
+
+        # If there is an actor update, the batch should align with actor PPO mini-batches too.
+        if self.config.trainer.critic_warmup <= self.global_steps:
+            actor_global_mini_batch_size = self.config.actor_rollout_ref.actor.ppo_mini_batch_size
+            actor_global_mini_batch_size *= self.config.actor_rollout_ref.rollout.n
+            required_multiple = math.lcm(required_multiple, actor_global_mini_batch_size)
+
+        # Notice lcm(a, b, c) == lcm(lcm(a, b), c), so it is optimal.
+        return required_multiple
+
     def _balance_batch(self, batch: KVBatchMeta, metrics, logging_prefix="global_seqlen", keep_minibatch=False):
         """Reorder the data on single controller such that each dp rank gets similar total tokens."""
-        global_seqlen_lst = torch.tensor([tag["seq_len"] for tag in batch.tags], dtype=torch.int64)
-        workload_lst = calculate_workload(global_seqlen_lst)
-
         # get actor dp size
         role, worker_group = "actor", self.actor_rollout_wg
         if role not in worker_group._dispatch_info:
@@ -1009,9 +1027,11 @@ class PPOTrainer:
             dp_rank_mapping = worker_group._dispatch_info[role]
         dp_size = max(dp_rank_mapping) + 1
 
-        # TODO: up sampling if batch is not divisible by dp_size
-        if len(batch) % dp_size != 0:
-            raise ValueError(f"Batch size {len(batch)} is not divisible by dp_size {dp_size}")
+        # Upsampling the batch with padding sequences
+        batch_multiple = self._get_required_batch_multiple(dp_size)
+        batch = upsample_batch_to_divisible_size(batch, batch_multiple, self.tokenizer.eos_token_id)
+        global_seqlen_lst = torch.tensor([tag["seq_len"] for tag in batch.tags], dtype=torch.int64)
+        workload_lst = calculate_workload(global_seqlen_lst)
 
         # reorder based on index. The data will be automatically equally partitioned by dispatch function
         global_partition_lst = get_seqlen_balanced_partitions(workload_lst, k_partitions=dp_size, equal_size=True)
@@ -1020,6 +1040,7 @@ class PPOTrainer:
             seqlen_list=global_seqlen_lst.tolist(), partitions=global_partition_lst, prefix=logging_prefix
         )
         metrics.update(global_balance_stats)
+        return batch
 
     def _compute_old_log_prob(self, batch: KVBatchMeta, metrics: dict) -> KVBatchMeta:
         """Compute the old log prob of the batch."""
@@ -1246,6 +1267,7 @@ class PPOTrainer:
 
     def _compute_metrics(self, batch: KVBatchMeta, metrics, timing_raw, global_steps, epoch):
         # 1. collect necessary fields from TransferQueue for computing metrics
+        non_padding_mask = np.array([not tag.get("is_padding", False) for tag in batch.tags], dtype=bool)
         fields = [
             "prompts",
             "responses",
@@ -1258,6 +1280,7 @@ class PPOTrainer:
             "num_turns",
         ]
         data = tq.kv_batch_get(keys=batch.keys, partition_id=batch.partition_id, select_fields=fields)
+        num_turns = np.array(data.pop("num_turns").tolist())
         prompt_length = data["prompts"].offsets().diff()
         response_length = data["responses"].offsets().diff()
         global_token_num = (prompt_length + response_length).tolist()
@@ -1268,18 +1291,20 @@ class PPOTrainer:
         data["prompt_length"] = prompt_length.float()
         data["response_length"] = response_length.float()
         batch = DataProto(batch=data, meta_info={"global_token_num": global_token_num})
+        metrics_batch = batch.select_idxs(non_padding_mask) if non_padding_mask.any() else batch
 
         # 2. compute metrics
         metrics.update({"training/global_step": global_steps, "training/epoch": epoch})
-        metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
+        metrics.update(compute_data_metrics(batch=metrics_batch, use_critic=self.use_critic))
         metrics.update(compute_timing_metrics(batch=batch, timing_raw=timing_raw))
         n_gpus = self.resource_pool_manager.get_n_gpus()
         metrics.update(compute_throughout_metrics(batch=batch, timing_raw=timing_raw, n_gpus=n_gpus))
         gradient_norm = metrics.get("actor/grad_norm", None)
-        metrics.update(compute_variance_proxy_metrics(batch=batch, gradient_norm=gradient_norm))
+        metrics.update(compute_variance_proxy_metrics(batch=metrics_batch, gradient_norm=gradient_norm))
 
         # 3. other auxiliary metrics
-        num_turns = np.array(data.pop("num_turns").tolist())
+        if non_padding_mask.any():
+            num_turns = num_turns[non_padding_mask]
         metrics.update(
             {
                 "training/num_turns/mean": num_turns.mean(),
@@ -1393,7 +1418,7 @@ class PPOTrainer:
                 batch = self._compute_reward_colocate(batch)
 
         # 4. balance batch across data parallel groups
-        self._balance_batch(batch, metrics=metrics)
+        batch = self._balance_batch(batch, metrics=metrics)
 
         # 5. compute old_log_prob
         with marked_timer("old_log_prob", timing_raw, color="blue"):
