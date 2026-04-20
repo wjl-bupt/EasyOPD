@@ -108,6 +108,7 @@ class vLLMHttpServer:
             cuda_visible_devices (str): cuda visible devices.
         """
         os.environ[get_visible_devices_keyword()] = cuda_visible_devices
+        os.environ["VERL_REPLICA_RANK"] = str(replica_rank)
 
         self.config = self._init_config(config)
         self.model_config = self._init_model_config(model_config)
