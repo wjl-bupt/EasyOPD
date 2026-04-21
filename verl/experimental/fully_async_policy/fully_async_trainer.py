@@ -407,6 +407,14 @@ class FullyAsyncTrainer(SeparateRayPPOTrainer):
 
         self.global_steps += 1
 
+        self.prev_step_profile = False
+        self.curr_step_profile = (
+            self.global_steps in self.config.global_profiler.steps
+            if self.config.global_profiler.steps is not None
+            else False
+        )
+        self.next_step_profile = False
+
         # Use queue mode, no need for traditional dataloader iterator
         # Initialize to get the first batch of data
         while True:
