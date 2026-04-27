@@ -25,6 +25,7 @@ from omegaconf import OmegaConf
 from verl.experimental.fully_async_policy.fully_async_rollouter import FullyAsyncRollouter
 from verl.experimental.fully_async_policy.fully_async_trainer import FullyAsyncTrainer
 from verl.experimental.fully_async_policy.message_queue import MessageQueue, MessageQueueClient
+from verl.experimental.reward_loop import migrate_legacy_reward_impl
 from verl.experimental.separation.utils import create_resource_pool_manager, create_role_worker_mapping
 from verl.trainer.ppo.utils import Role
 from verl.utils.device import auto_set_device
@@ -218,6 +219,7 @@ def main(config):
     # TODO: unify rollout config with actor_rollout_ref
     config.actor_rollout_ref.rollout.nnodes = config.rollout.nnodes
     config.actor_rollout_ref.rollout.n_gpus_per_node = config.rollout.n_gpus_per_node
+    config = migrate_legacy_reward_impl(config)
     run_ppo(config, task_runner_class=FullyAsyncTaskRunner)
     print(f"total time: {time() - start_time:.2f} seconds")
 
