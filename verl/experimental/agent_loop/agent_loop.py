@@ -47,7 +47,7 @@ from transformers import AutoProcessor, AutoTokenizer
 
 from verl.experimental.agent_loop.utils import resolve_config_path
 from verl.protocol import DataProto
-from verl.tools.utils.function_tool import FunctionTool, load_function_tools_from_path
+from verl.tools.utils.tool_registry import load_all_tools
 from verl.trainer.distillation import is_distillation_enabled
 from verl.utils.chat_template import apply_chat_template, initialize_system_prompt
 from verl.utils.config import omega_conf_to_dataclass
@@ -177,12 +177,12 @@ class DictConfigWrap:
         self.config = config
 
 
-class FunctionToolListWrap:
-    """Wrapper for a list of :class:`FunctionTool` to avoid
-    ``hydra.utils.instantiate`` recursive resolve."""
+class ToolListWrap:
+    """Wraps a tool list so ``hydra.utils.instantiate`` doesn't recursively
+    resolve its elements (which would demote them to ``DictConfig``)."""
 
-    def __init__(self, function_tools: list[FunctionTool]):
-        self.function_tools = function_tools
+    def __init__(self, tools: list):
+        self.tools = tools
 
 
 class AgentLoopBase(ABC):
@@ -382,12 +382,13 @@ class AgentLoopWorker:
                 teacher_client=teacher_client,
             )
 
-        # Load function-based tools once per worker
+        # Load tools once per worker; each trajectory just reuses self.tools.
+        tool_config_path = self.rollout_config.multi_turn.tool_config_path
         function_tool_path = self.rollout_config.multi_turn.function_tool_path
-        if function_tool_path:
-            self.function_tools = load_function_tools_from_path(resolve_config_path(function_tool_path))
-        else:
-            self.function_tools = []
+        self.tools = load_all_tools(
+            tool_config_path=resolve_config_path(tool_config_path) if tool_config_path else None,
+            function_tool_path=resolve_config_path(function_tool_path) if function_tool_path else None,
+        )
 
         # Load custom agent loop implementations from config path
         agent_loop_config_path = self.rollout_config.agent.agent_loop_config_path
@@ -522,7 +523,7 @@ class AgentLoopWorker:
                 processor=self.processor,
                 dataset_cls=self.dataset_cls,
                 data_config=DictConfigWrap(self.config.data),
-                function_tools=FunctionToolListWrap(self.function_tools),
+                tools=ToolListWrap(self.tools),
             )
             output: AgentLoopOutput = await agent_loop.run(sampling_params, **kwargs)
             return await self._agent_loop_postprocess(output, trajectory["validate"], **kwargs)

@@ -12,57 +12,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import asyncio
+from __future__ import annotations
+
 import importlib
 import logging
 import os
 import sys
-import threading
 from enum import Enum
+from typing import TYPE_CHECKING, Optional
 
 from omegaconf import OmegaConf
 
 from verl.tools.schemas import OpenAIFunctionToolSchema
+from verl.tools.utils.function_tool import FunctionTool, load_function_tools_from_path
+
+if TYPE_CHECKING:
+    from verl.tools.base_tool import BaseTool
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 
 class ToolType(Enum):
+    # MCP tool is removed for now.
     NATIVE = "native"
-    MCP = "mcp"
-
-
-async def initialize_mcp_tool(tool_cls, tool_config) -> list:
-    from verl.tools.utils.mcp_clients.McpClientManager import ClientManager
-
-    tool_list = []
-    mcp_servers_config_path = tool_config.mcp.mcp_servers_config_path
-    tool_selected_list = tool_config.mcp.tool_selected_list if "tool_selected_list" in tool_config.mcp else None
-    await ClientManager.initialize(mcp_servers_config_path, tool_config.config.rate_limit)
-    # Wait for MCP client to be ready
-    max_retries = 10
-    retry_interval = 2  # seconds
-    for i in range(max_retries):
-        tool_schemas = await ClientManager.fetch_tool_schemas(tool_selected_list)
-        if tool_schemas:
-            break
-        if i < max_retries - 1:
-            logger.debug(f"Waiting for MCP client to be ready, attempt {i + 1}/{max_retries}")
-            await asyncio.sleep(retry_interval)
-    else:
-        raise RuntimeError("Failed to initialize MCP tools after maximum retries")
-    # mcp registry
-    assert len(tool_schemas), "mcp tool is empty"
-    for tool_schema_dict in tool_schemas:
-        logger.debug(f"tool_schema_dict: {tool_schema_dict}")
-        tool_schema = OpenAIFunctionToolSchema.model_validate(tool_schema_dict)
-        tool = tool_cls(
-            config=OmegaConf.to_container(tool_config.config, resolve=True),
-            tool_schema=tool_schema,
-        )
-        tool_list.append(tool)
-    return tool_list
 
 
 def get_tool_class(cls_name):
@@ -79,64 +52,50 @@ def get_tool_class(cls_name):
     return tool_cls
 
 
-def initialize_tools_from_config(tools_config_file):
-    """Initialize tools from config file.
-
-    Supports both NATIVE and MCP tool types. For MCP tools, a temporary event loop
-    is created only when needed and properly closed after use to prevent memory leaks.
-    """
+def initialize_tools_from_config(tools_config_file) -> list:
+    """Instantiate ``BaseTool`` subclasses declared in a yaml config."""
     tools_config = OmegaConf.load(tools_config_file)
     tool_list = []
 
-    # Lazy initialization for MCP support - only create event loop when needed
-    tmp_event_loop = None
-    thread = None
+    for tool_config in tools_config.tools:
+        cls_name = tool_config.class_name
+        tool_type = ToolType(tool_config.config.type)
+        tool_cls = get_tool_class(cls_name)
 
-    def get_mcp_event_loop():
-        """Lazily create event loop and thread for MCP tools."""
-        nonlocal tmp_event_loop, thread
-        if tmp_event_loop is None:
-            tmp_event_loop = asyncio.new_event_loop()
-            thread = threading.Thread(target=tmp_event_loop.run_forever, name="mcp tool list fetcher", daemon=True)
-            thread.start()
-        return tmp_event_loop
-
-    def run_coroutine(coroutine):
-        """Run coroutine in the MCP event loop."""
-        loop = get_mcp_event_loop()
-        future = asyncio.run_coroutine_threadsafe(coroutine, loop)
-        return future.result()
-
-    try:
-        for tool_config in tools_config.tools:
-            cls_name = tool_config.class_name
-            tool_type = ToolType(tool_config.config.type)
-            tool_cls = get_tool_class(cls_name)
-
-            match tool_type:
-                case ToolType.NATIVE:
-                    if tool_config.get("tool_schema", None) is None:
-                        tool_schema = None
-                    else:
-                        tool_schema_dict = OmegaConf.to_container(tool_config.tool_schema, resolve=True)
-                        tool_schema = OpenAIFunctionToolSchema.model_validate(tool_schema_dict)
-                    tool = tool_cls(
-                        config=OmegaConf.to_container(tool_config.config, resolve=True),
-                        tool_schema=tool_schema,
-                    )
-                    tool_list.append(tool)
-                case ToolType.MCP:
-                    mcp_tools = run_coroutine(initialize_mcp_tool(tool_cls, tool_config))
-                    tool_list.extend(mcp_tools)
-                case _:
-                    raise NotImplementedError
-    finally:
-        # Properly cleanup event loop if it was created
-        if tmp_event_loop is not None:
-            # stop first and then close
-            tmp_event_loop.call_soon_threadsafe(tmp_event_loop.stop)
-            if thread is not None and thread.is_alive():
-                thread.join(timeout=5.0)
-            tmp_event_loop.close()
+        match tool_type:
+            case ToolType.NATIVE:
+                if tool_config.get("tool_schema", None) is None:
+                    tool_schema = None
+                else:
+                    tool_schema_dict = OmegaConf.to_container(tool_config.tool_schema, resolve=True)
+                    tool_schema = OpenAIFunctionToolSchema.model_validate(tool_schema_dict)
+                tool = tool_cls(
+                    config=OmegaConf.to_container(tool_config.config, resolve=True),
+                    tool_schema=tool_schema,
+                )
+                tool_list.append(tool)
+            case _:
+                raise NotImplementedError(f"Unsupported tool type: {tool_type}")
 
     return tool_list
+
+
+def load_all_tools(
+    tool_config_path: Optional[str],
+    function_tool_path: Optional[str],
+) -> list[BaseTool | FunctionTool]:
+    """Load native + function tools, check for name collisions, return merged list."""
+    native_tools: list = initialize_tools_from_config(tool_config_path) if tool_config_path else []
+    function_tools: list[FunctionTool] = load_function_tools_from_path(function_tool_path) if function_tool_path else []
+
+    if function_tools and native_tools:
+        existing = {t.name for t in native_tools}
+        collisions = sorted(t.name for t in function_tools if t.name in existing)
+        if collisions:
+            raise ValueError(
+                f"Function tool name(s) {collisions} collide with tools already declared in "
+                f"'{tool_config_path}'. Each tool name must be unique across `tool_config_path` "
+                f"and `function_tool_path`; rename one of them."
+            )
+
+    return native_tools + function_tools

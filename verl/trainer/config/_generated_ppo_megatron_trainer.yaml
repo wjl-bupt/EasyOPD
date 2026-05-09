@@ -472,6 +472,8 @@ data:
   val_batch_size: null
   tool_config_path: ${oc.select:actor_rollout_ref.rollout.multi_turn.tool_config_path,
     null}
+  function_tool_path: ${oc.select:actor_rollout_ref.rollout.multi_turn.function_tool_path,
+    null}
   return_raw_input_ids: false
   return_raw_chat: true
   return_full_prompt: false
