@@ -23,8 +23,8 @@ from typing import TYPE_CHECKING, Optional
 
 from omegaconf import OmegaConf
 
+from verl.tools.function_tool import FunctionTool, load_function_tools_from_path
 from verl.tools.schemas import OpenAIFunctionToolSchema
-from verl.tools.utils.function_tool import FunctionTool, load_function_tools_from_path
 
 if TYPE_CHECKING:
     from verl.tools.base_tool import BaseTool

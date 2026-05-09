@@ -22,15 +22,15 @@ from typing import Literal
 
 import pytest
 
-from verl.tools.schemas import OpenAIFunctionToolSchema, ToolResponse
-from verl.tools.utils import function_tool as function_tool_mod
-from verl.tools.utils.function_tool import (
+from verl.tools import function_tool as function_tool_mod
+from verl.tools.function_tool import (
     FUNCTION_TOOL_REGISTRY,
     FunctionTool,
     function_tool,
     load_function_tools_from_path,
     normalize_function_tool_return,
 )
+from verl.tools.schemas import OpenAIFunctionToolSchema, ToolResponse
 
 
 @pytest.fixture(autouse=True)
@@ -337,7 +337,7 @@ def test_load_basic_returns_registered_tools(tmp_path):
     path = _write_tool_file(
         tmp_path,
         """
-        from verl.tools.utils.function_tool import function_tool
+        from verl.tools.function_tool import function_tool
 
         @function_tool("greet")
         def greet(name: str) -> str:
@@ -359,7 +359,7 @@ def test_load_multiple_tools(tmp_path):
     path = _write_tool_file(
         tmp_path,
         """
-        from verl.tools.utils.function_tool import function_tool
+        from verl.tools.function_tool import function_tool
 
         @function_tool("a")
         def a(x: str) -> str:
@@ -412,7 +412,7 @@ def test_load_is_idempotent_across_calls(tmp_path):
     path = _write_tool_file(
         tmp_path,
         """
-        from verl.tools.utils.function_tool import function_tool
+        from verl.tools.function_tool import function_tool
 
         @function_tool("idem")
         def idem(x: str) -> str:
@@ -449,7 +449,7 @@ def test_load_returns_only_tools_added_by_this_file(tmp_path):
     path = _write_tool_file(
         tmp_path,
         """
-        from verl.tools.utils.function_tool import function_tool
+        from verl.tools.function_tool import function_tool
 
         @function_tool("only_mine")
         def only_mine(x: str) -> str:
@@ -471,7 +471,7 @@ def test_relative_path_resolved_against_cwd(tmp_path, monkeypatch):
     path_str = _write_tool_file(
         tmp_path,
         """
-        from verl.tools.utils.function_tool import function_tool
+        from verl.tools.function_tool import function_tool
 
         @function_tool("rel")
         def rel(x: str) -> str:
@@ -613,7 +613,7 @@ def test_tool_list_wrap_survives_hydra_instantiate(tmp_path):
     path = _write_tool_file(
         tmp_path,
         """
-        from verl.tools.utils.function_tool import function_tool
+        from verl.tools.function_tool import function_tool
 
         @function_tool
         def probe(text: str) -> str:

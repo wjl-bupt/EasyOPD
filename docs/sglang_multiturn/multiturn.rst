@@ -1,7 +1,7 @@
 Multi-turn Rollout Support
 ==========================
 
-Last updated: 06/27/2025.
+Last updated: 05/09/2026.
 
 Basic Configuration
 ~~~~~~~~~~~~~~~~~~~
@@ -30,7 +30,7 @@ For custom environment interaction tools, you can implement your own tools based
             type: native
         tool_schema:
 
-You may refer to GSM8KTool_example_configuration_, which is one example of the tool configurations. Its implementation can be found in gsm8k_tool.py_.
+For stateless tools that don't need ``BaseTool``'s ``create``/``release`` lifecycle, see the `Function Tool Configuration`_ section below for the simpler ``@function_tool`` API.
 
 Finally, set the ``tools_config_file`` in your rollout config:
 
@@ -97,7 +97,7 @@ Define your tools in ``path/to/your_tools.py``. The decorator works either bare 
 
 .. code-block:: python
 
-    from verl.tools.utils.function_tool import function_tool
+    from verl.tools.function_tool import function_tool
 
     @function_tool
     def get_weather(city: str) -> dict:
@@ -325,10 +325,6 @@ GSM8K Multi-turn Training Performance
 See the training performance of multi-turn rollout on the GSM8K task HERE_.
 
 .. _HERE: https://wandb.ai/zhaochenyang20/gsm8k_async_rl/runs/1ro1r7om?nw=nwuserzhaochenyang20
-
-.. _GSM8KTool_example_configuration: https://github.com/verl-project/verl/blob/main/examples/sglang_multiturn/config/tool_config/gsm8k_tool_config.yaml
-
-.. _gsm8k_tool.py: https://github.com/verl-project/verl/blob/main/verl/tools/gsm8k_tool.py
 
 .. _function_tool_examples: https://github.com/verl-project/verl/blob/main/tests/experimental/agent_loop/function_tool_examples.py
 

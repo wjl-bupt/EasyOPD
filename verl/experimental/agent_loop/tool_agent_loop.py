@@ -30,8 +30,8 @@ from verl.experimental.agent_loop.agent_loop import (
 )
 from verl.experimental.agent_loop.tool_parser import FunctionCall, ToolParser
 from verl.experimental.agent_loop.utils import build_gpt_oss_tool_response_text
+from verl.tools.function_tool import FunctionTool, normalize_function_tool_return
 from verl.tools.schemas import ToolResponse
-from verl.tools.utils.function_tool import FunctionTool, normalize_function_tool_return
 from verl.utils.profiler import simple_timer
 from verl.utils.rollout_trace import rollout_trace_op
 from verl.workers.rollout.replica import TokenOutput

@@ -122,7 +122,7 @@ class RLHFDataset(Dataset):
         self.tool_schemas = None
         if self.tool_config_path or self.function_tool_path:
             try:
-                from verl.tools.utils.tool_registry import load_all_tools
+                from verl.tools.tool_registry import load_all_tools
 
                 tool_list = load_all_tools(
                     tool_config_path=self.tool_config_path,

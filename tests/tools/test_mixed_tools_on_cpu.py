@@ -13,7 +13,7 @@
 # limitations under the License.
 """Coexistence test: yaml-defined native tools + ``@function_tool`` tools.
 
-Pins :func:`verl.tools.utils.tool_registry.load_all_tools`, the loader both
+Pins :func:`verl.tools.tool_registry.load_all_tools`, the loader both
 ``AgentLoopWorker`` and ``RLHFDataset`` use. The yaml mirrors
 ``recipe/search_agent/config/all_tool_config.yaml`` but points at CPU-only
 ``BaseTool`` stubs in ``tests.tools._stub_search_tools``.
@@ -28,14 +28,14 @@ from pathlib import Path
 import pytest
 
 from tests.tools._stub_search_tools import StubCrawlTool, StubSearchTool
+from verl.tools import function_tool as function_tool_mod
 from verl.tools.base_tool import BaseTool
-from verl.tools.utils import function_tool as function_tool_mod
-from verl.tools.utils.function_tool import (
+from verl.tools.function_tool import (
     FUNCTION_TOOL_REGISTRY,
     FunctionTool,
     normalize_function_tool_return,
 )
-from verl.tools.utils.tool_registry import load_all_tools
+from verl.tools.tool_registry import load_all_tools
 
 
 @pytest.fixture(autouse=True)
@@ -87,7 +87,7 @@ tools:
 """
 
 _FUNCTION_TOOL_BODY = """\
-from verl.tools.utils.function_tool import function_tool
+from verl.tools.function_tool import function_tool
 
 @function_tool("get_weather")
 def get_weather(city: str) -> dict:
@@ -251,7 +251,7 @@ def test_function_tool_name_collision_with_native_tool_raises(native_yaml_path, 
     colliding_path.write_text(
         textwrap.dedent(
             """
-            from verl.tools.utils.function_tool import function_tool
+            from verl.tools.function_tool import function_tool
 
             @function_tool("search")
             def search(query_list: list) -> str:
@@ -275,7 +275,7 @@ def test_function_tool_name_collision_reports_all_offenders(native_yaml_path, tm
     colliding_path.write_text(
         textwrap.dedent(
             """
-            from verl.tools.utils.function_tool import function_tool
+            from verl.tools.function_tool import function_tool
 
             @function_tool("crawler")
             def crawler(url_list: list) -> str:

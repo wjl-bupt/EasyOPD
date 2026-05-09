@@ -492,12 +492,6 @@ data:
     path: null
     name: null
   return_multi_modal_inputs: true
-  sampler:
-    class_path: null
-    class_name: null
-  datagen:
-    path: null
-    name: null
   apply_chat_template_kwargs: {}
 critic:
   optim:
