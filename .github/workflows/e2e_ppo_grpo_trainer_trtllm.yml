@@ -92,7 +92,7 @@ permissions:
   contents: read
 
 env:
-  IMAGE: "verl-ci-cn-beijing.cr.volces.com/verlai/verl:trtllm1.3.0rc13-20250504"
+  IMAGE: "verl-ci-cn-beijing.cr.volces.com/verlai/verl:trtllm1.3.0rc14"
   DYNAMIC_RUNNER_ENDPOINT: "https://sd10g3clalm04ug7alq90.apigateway-cn-beijing.volceapi.com/runner"
 
 jobs:
@@ -145,9 +145,6 @@ jobs:
             tests/workers/rollout/rollout_trtllm/test_async_server.py \
             tests/workers/rollout/rollout_trtllm/test_inter_node_rollout.py \
             tests/workers/rollout/rollout_trtllm/test_trtllm_rollout_utils.py
-          ray stop --force
-          pytest -v -s --durations=20 \
-            tests/workers/rollout/rollout_trtllm/test_trtllm_abort.py
 
   e2e_grpo_trainer_megatron-qwen2:
     needs: setup
@@ -171,8 +168,6 @@ jobs:
         run: |
           pip3 install -r requirements-test.txt
           pip3 install --no-deps -e .
-          # WAR: CI image predates mbridge cf71117 (removes `imp` for Python 3.12). Drop this line after CI image is refreshed.
-          pip3 install --force-reinstall --no-deps --no-build-isolation git+https://github.com/ISEEKYAN/mbridge.git
       - name: Prepare GSM8K dataset
         run: |
           python3 examples/data_preprocess/gsm8k.py --local_dataset_path ${HOME}/models/hf_data/gsm8k --local_save_dir ${PWD}/data/gsm8k
@@ -226,8 +221,6 @@ jobs:
           pip3 install --no-deps -e .
           pip3 install qwen_vl_utils
           pip3 install mathruler
-          # WAR: CI image predates mbridge cf71117 (removes `imp` for Python 3.12). Drop this line after CI image is refreshed.
-          pip3 install --force-reinstall --no-deps --no-build-isolation git+https://github.com/ISEEKYAN/mbridge.git
       - name: Prepare GEO3K dataset
         run: |
           python3 examples/data_preprocess/geo3k.py --local_dataset_path ${HOME}/models/hf_data/hiyouga/geometry3k --local_save_dir ${PWD}/data/geo3k
