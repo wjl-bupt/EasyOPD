@@ -168,6 +168,7 @@ verl is fast with:
    ascend_tutorial/model_support/examples/gspo_optimization_practice.md
    ascend_tutorial/dev_guide/model_dev/evaluation.md
    ascend_tutorial/dev_guide/model_dev/parameter_and_metrics.md
+   ascend_tutorial/dev_guide/model_dev/transfer_to_npu_guide.md
    ascend_tutorial/dev_guide/precision_analysis/precision_alignment_zh.md
    ascend_tutorial/dev_guide/precision_analysis/precision_debugger_zh.md
    ascend_tutorial/dev_guide/performance/ascend_performance_analysis_guide.md
