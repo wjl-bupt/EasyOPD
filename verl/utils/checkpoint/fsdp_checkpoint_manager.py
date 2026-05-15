@@ -32,18 +32,13 @@ from verl.utils.device import is_cuda_available
 from verl.utils.fs import copy_to_local, is_non_local, local_mkdir_safe
 from verl.utils.fsdp_utils import fsdp_version, get_fsdp_full_state_dict, get_fsdp_state_ctx
 from verl.utils.logger import log_with_rank
-from verl.utils.transformers_compat import get_auto_model_for_vision2seq
+from verl.utils.transformers_compat import drop_tied_target_keys, get_auto_model_for_vision2seq
 
 from .checkpoint_manager import BaseCheckpointManager
 
 # Setup logging
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
-
-
-# Re-export so existing callers that previously imported the symbol from this
-# module continue to work.
-from verl.utils.transformers_compat import drop_tied_target_keys as _drop_tied_target_keys  # noqa: E402
 
 
 @dataclass
@@ -344,7 +339,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
                             f"in, using a generation config created from the model config when saving hf_model."
                         )
 
-                _drop_tied_target_keys(state_dict, save_model, model_config)
+                drop_tied_target_keys(state_dict, save_model, model_config)
 
                 save_model.save_pretrained(hf_local_path, state_dict=state_dict)
                 log_with_rank(
