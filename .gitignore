@@ -1,4 +1,6 @@
 **/*.pt
+**/*.bin
+**/*.safetensors
 **/checkpoints
 **/wget-log
 **/_build/
