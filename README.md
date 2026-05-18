@@ -184,37 +184,147 @@ git branch
 
 ## 5. 代码目录结构规范
 
-每个方法在 `easyopd/methods/` 下有一个独立子目录，结构如下：
+### 5.1 整体目录结构
 
 ```
-easyopd/methods/<方法名>/
-├── __init__.py          # 导入并注册方法
-├── trainer.py           # Trainer 类（继承或组合 verl 的 trainer）
-├── losses.py            # 方法特有的 loss 函数（如有）
-├── reward_manager.py    # 方法特有的 reward 管理（如有）
-├── utils.py             # 方法内部工具函数（如有）
-└── README.md            # 方法说明文档
+EasyOPD/
+├── verl/                          # verl 底层（允许按规范修改）
+├── easyopd/                       # ★ EasyOPD 统一接口层
+│   ├── __init__.py                # from_hparams() 入口
+│   ├── registry.py                # 方法注册表
+│   ├── config/                    # 统一 yaml 配置
+│   │   ├── gkd.yaml
+│   │   ├── ropd.yaml
+│   │   ├── simct.yaml
+│   │   ├── sod.yaml
+│   │   └── ...
+│   ├── methods/                   # 各方法的核心实现
+│   │   ├── gkd/
+│   │   ├── ropd/
+│   │   ├── simct/
+│   │   ├── sod/
+│   │   ├── dskd/
+│   │   └── ...
+│   └── utils/                     # 公共工具
+├── examples/                      # 训练脚本（每个方法一套）
+│   ├── ropd/
+│   ├── simct/
+│   ├── sod/
+│   └── ...
+└── ...
 ```
 
-对应的配置文件放在：
+### 5.2 方法实现的三种模式
+
+根据对已有方法的调研，不同方法对 verl 的修改程度不同，大致分为三种模式：
+
+#### 模式 A：轻量修改 verl 配置 + 在 trainer 中加逻辑（如 SOD）
+
+SOD 的做法是在 verl 的配置 dataclass 中加几个字段，在 `ray_trainer.py` 中加一段 if 分支逻辑。这种方式改动最小，但直接嵌入了 verl 代码。
+
+**接入方式：**
+
+1. 将你的核心算法逻辑（如 `compute_stepwise_opd_weights` 函数）抽出来放到 `easyopd/methods/sod/core.py`
+2. 在 verl 的 trainer 中通过 **import 调用** 你的函数，而不是把函数体直接写在 verl 文件里
+3. 配置字段可以加在 verl 的 config dataclass 中（因为 verl 的 hydra 配置系统需要）
 
 ```
-easyopd/config/<方法名>.yaml
+easyopd/methods/sod/
+├── __init__.py
+├── core.py              # compute_stepwise_opd_weights() 等核心算法
+└── README.md            # 方法说明、参数含义、复现步骤
+
+verl/trainer/config/algorithm.py   # 加 stepwise_* 配置字段（最小改动）
+verl/trainer/ppo/ray_trainer.py    # 加 if stepwise_enable 分支，import sod.core
+
+examples/sod/
+├── run_sod.sh           # 训练脚本
+└── README.md
 ```
 
-对应的训练脚本放在：
+#### 模式 B：独立的 reward/pipeline 模块 + 修改 verl 入口（如 ROPD）
+
+ROPD 是黑盒 OPD，需要独立的 rubric 生成和评分 pipeline，同时修改了 verl 的 reward_manager 和 fully_async 模块。
+
+**接入方式：**
+
+1. 独立的 pipeline 代码放 `easyopd/methods/ropd/`（如 rubricator、verifier、judge worker）
+2. 对 verl 的修改集中在 reward_manager 注册和 trainer 入口
 
 ```
-examples/<方法名>/
-├── run_xxx.sh           # 训练启动脚本
-└── README.md            # 使用说明
+easyopd/methods/ropd/
+├── __init__.py
+├── pipeline.py          # ROPD 主 pipeline（rubric 生成 → 评分 → reward）
+├── reward_manager.py    # ROPD 的 reward manager
+├── judge_worker.py      # Judge 模型 worker
+├── prompts/             # Rubric/Verify prompt 模板
+└── README.md
+
+verl/workers/reward_manager/  # 注册 ROPD reward manager
+
+examples/ropd/
+├── run_ropd.sh
+├── launch_judge_vllm.sh
+└── README.md
 ```
 
-### 关键原则
+#### 模式 C：完全独立的训练框架，需要重新适配（如 SimCT/KDFlow）
 
-1. **不要随意修改 `verl/` 目录下的代码**。如果确实需要修改 verl 底层代码，必须在 commit message 中说明原因。
-2. **方法之间互不依赖**。你的方法代码应该完全在 `easyopd/methods/<你的方法>/` 内自包含。
-3. **公共工具放 `easyopd/utils/`**。如果你写了一个多个方法都可能用到的工具函数，放到 `easyopd/utils/` 下。
+SimCT 原本基于 KDFlow（独立框架），有自己的 trainer、dataset、loss 体系，需要在 verl 框架下重新实现。
+
+**接入方式：**
+
+1. 核心算法（cross-tokenizer alignment、loss 函数）放 `easyopd/methods/simct/`
+2. 利用 verl 已有的 distillation 基础设施（`verl/trainer/distillation/`），通过扩展 loss_mode 接入
+3. 如果 verl 的 distillation 模块不支持你的场景（如跨 tokenizer），可以在 verl 的 loss 注册表中添加新的 loss 类型
+
+```
+easyopd/methods/simct/
+├── __init__.py
+├── losses.py            # SimCT 特有的 cross-tokenizer loss
+├── alignment.py         # tokenizer 对齐工具
+├── trainer.py           # 如果需要自定义 trainer 逻辑
+└── README.md
+
+verl/trainer/distillation/losses.py  # 注册 simct loss mode（最小改动）
+
+examples/simct/
+├── run_simct.sh
+└── README.md
+```
+
+### 5.3 关键原则
+
+1. **核心算法逻辑放 `easyopd/methods/<方法名>/`**。即使你需要改 verl 文件，也要把算法的核心实现（loss 函数、权重计算、pipeline 逻辑等）放在自己的目录下，verl 文件中只做 import 和调用。
+2. **对 verl 的修改要最小化、可追踪**。改 verl 文件时：
+   - 用注释标明 `# [EasyOPD] Added for <方法名>`
+   - 尽量用 if 分支或注册机制，不要删改原有逻辑
+   - commit message 中列出改了 verl 的哪些文件
+3. **方法之间不要互相依赖**。你的 if 分支不应该影响别人的 if 分支。
+4. **每个方法必须有 README.md**，说明：
+   - 方法原理简述（一段话）
+   - 修改了 verl 的哪些文件、为什么要改
+   - 如何运行（完整的复现步骤）
+   - 依赖的模型和数据
+
+### 5.4 对 verl 文件的修改规范
+
+由于很多方法不可避免要改 verl 的文件，为了避免冲突和混乱，请遵循：
+
+```python
+# ============ [EasyOPD:SOD] Step-wise OPD weighting ============
+# 在这里添加你的逻辑
+stepwise_enable = getattr(cfg, "stepwise_enable", False)
+if stepwise_enable:
+    from easyopd.methods.sod.core import compute_stepwise_opd_weights
+    # ... 调用你的方法
+# ============ [EasyOPD:SOD] End ============
+```
+
+**规范要点：**
+- 用 `# [EasyOPD:<方法名>]` 注释包裹你的修改
+- 新增的配置字段要有默认值（`False` / `None` / `0`），确保不开启时不影响原有行为
+- 不要删除或修改 verl 原有的代码逻辑，只做**增量添加**
 
 ---
 
@@ -222,15 +332,21 @@ examples/<方法名>/
 
 ### 6.1 注册你的方法
 
-在 `easyopd/registry.py` 中使用装饰器注册：
+在 `easyopd/methods/<方法名>/__init__.py` 中使用装饰器注册：
 
 ```python
-# easyopd/methods/simct/__init__.py
+# easyopd/methods/sod/__init__.py
 from easyopd.registry import register_method
 
-@register_method("simct")
-class SimCTTrainer:
-    """SimCT: Cross-Tokenizer On-Policy Distillation"""
+@register_method("sod")
+class SODMethod:
+    """SOD: Step-wise On-policy Distillation"""
+
+    # 方法元信息
+    verl_modified_files = [
+        "verl/trainer/config/algorithm.py",      # 添加 stepwise_* 配置
+        "verl/trainer/ppo/ray_trainer.py",        # 添加 stepwise OPD 分支
+    ]
 
     def __init__(self, config):
         ...
@@ -241,36 +357,79 @@ class SimCTTrainer:
 
 ### 6.2 编写 yaml 配置文件
 
+配置文件应该能让用户**一键复现**你的实验：
+
 ```yaml
-# easyopd/config/simct.yaml
+# easyopd/config/sod.yaml
 method:
-  name: simct
-  description: "SimCT: Recovering Lost Supervision for Cross-Tokenizer OPD"
+  name: sod
+  description: "SOD: Step-wise On-policy Distillation for Small LM Agents"
 
 model:
-  student_model_path: "google/gemma-2-2b-it"
-  teacher_model_path: "Qwen/Qwen2.5-7B-Instruct"
+  student_model_path: "Qwen/Qwen3-1.7B"
+  teacher_model_path: "<GRPO-optimized teacher checkpoint>"
 
 training:
-  num_epochs: 3
-  batch_size: 128
-  learning_rate: 5e-6
-  # ... 其他训练参数
+  # verl 标准训练参数
+  adv_estimator: grpo
+  clip_ratio_low: 0.2
+  clip_ratio_high: 0.28
 
-distillation:
-  # 方法特有的蒸馏参数
-  loss_mode: "simct"
-  # ...
+  # SOD 特有参数
+  token_kl_reg:
+    stepwise_enable: true
+    stepwise_epsilon: 1e-6
+    stepwise_delta: 0.5
+    stepwise_opd_coef: 1.0
+
+data:
+  train_files: ["<path to RL training data>"]
+  test_files: ["<path to eval data>"]
 ```
 
-### 6.3 用户调用方式（目标接口）
+### 6.3 编写方法 README
+
+每个方法的 `easyopd/methods/<方法名>/README.md` 必须包含：
+
+```markdown
+# <方法名>
+
+## 方法简介
+一段话描述方法的核心思想。
+
+## 对 verl 的修改
+| 文件 | 修改内容 | 原因 |
+|------|----------|------|
+| verl/trainer/config/algorithm.py | 添加 stepwise_* 字段 | SOD 需要配置步级权重参数 |
+| verl/trainer/ppo/ray_trainer.py | 添加 compute_stepwise_opd_weights 调用 | 核心算法入口 |
+
+## 复现步骤
+1. 数据准备：...
+2. 模型准备：...
+3. 运行训练：`bash examples/sod/run_sod.sh`
+4. 评测：...
+
+## 实验结果
+| Benchmark | Score |
+|-----------|-------|
+| ... | ... |
+```
+
+### 6.4 用户调用方式（目标接口）
 
 ```python
 from easyopd import EasyOPD
 
 # 一行调用
-trainer = EasyOPD.from_hparams("simct", config_path="easyopd/config/simct.yaml")
+trainer = EasyOPD.from_hparams("sod", config_path="easyopd/config/sod.yaml")
 trainer.train()
+```
+
+或者直接用 verl 的方式运行（因为方法已经注入到 verl 中）：
+
+```bash
+# 直接用训练脚本
+bash examples/sod/run_sod.sh
 ```
 
 ---
@@ -502,12 +661,15 @@ git stash
 git stash pop
 ```
 
-### Q5: 需要修改 verl 底层代码怎么办？
+### Q5: 我的方法需要修改 verl 的文件怎么办？
 
-1. 先确认是否真的需要改（能否在 `easyopd/` 层面解决）
-2. 如果必须改，在 commit message 中清楚说明原因
-3. 尽量做最小改动，不要大范围重构 verl 代码
-4. 在 PR 描述中标注修改了 verl 的哪些文件
+这是正常的，很多方法都需要改 verl 文件（参见第 5.2 节的三种模式）。请遵循：
+
+1. 核心算法逻辑放 `easyopd/methods/<你的方法>/`，verl 中只做 import 调用
+2. 用 `# [EasyOPD:<方法名>]` 注释包裹你的修改
+3. 新增配置字段要有默认值，确保不开启时不影响原有行为
+4. 不要删改 verl 原有逻辑，只做增量添加
+5. 在方法 README 中列出你改了 verl 的哪些文件
 
 ### Q6: `recipe/` 目录是空的
 
