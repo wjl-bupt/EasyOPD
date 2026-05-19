@@ -193,26 +193,38 @@ def _resolve_student_path(config) -> str:
 
 
 def _unwrap_non_tensor(arr):
-    """Best-effort unwrap of verl `NonTensorData` wrappers; passes through
-    plain numpy arrays unchanged. We avoid a hard dependency on
-    `verl.utils.tensordict_utils` to keep unit tests lightweight."""
+    """Best-effort unwrap of verl `NonTensorData` / `NonTensorStack`
+    wrappers into plain Python objects (e.g. a numpy object array or a
+    list of numpy arrays). Pass-through for anything else."""
     if arr is None:
         return None
-    # verl NonTensorData exposes `.data`; numpy arrays do not.
-    if hasattr(arr, "data") and not isinstance(arr, np.ndarray):
+    # NonTensorStack: indexable per batch dim → list of unwrapped items
+    if hasattr(arr, "tolist") and not isinstance(arr, (np.ndarray, torch.Tensor, list, tuple)):
+        try:
+            return arr.tolist()
+        except Exception:  # noqa: BLE001
+            pass
+    # NonTensorData: exposes `.data`
+    if hasattr(arr, "data") and not isinstance(arr, (np.ndarray, torch.Tensor)):
         return arr.data
     return arr
 
 
 def _extract_non_tensor(data, key: str):
-    """Pull a non-tensor entry from a verl micro-batch.
+    """Pull a non-tensor entry out of a verl micro-batch.
 
-    `data` may be either a `DataProto` (has `non_tensor_batch`) or a
-    `TensorDict` (in which case object-typed fields are stored as
-    NonTensorData and reachable via `data.get(key)`)."""
+    The micro-batch reaching the loss fn is a `TensorDict`; agent_loop
+    populated `DataProto.non_tensor_batch[key]` (an `np.ndarray[object]`),
+    which `DataProto.to_tensordict` re-wrapped into a `NonTensorStack`
+    keyed by `key`. We unwrap that stack into a per-sample list of
+    numpy arrays. As a fallback we also accept a `DataProto` (test
+    contexts only)."""
+    # Test path: caller passed a DataProto-like object.
     nt = getattr(data, "non_tensor_batch", None)
-    if nt is not None and key in nt:
+    if isinstance(nt, dict) and key in nt:
         return _unwrap_non_tensor(nt[key])
+
+    # Production path: TensorDict → NonTensorStack.
     try:
         val = data.get(key)
     except Exception:  # noqa: BLE001
@@ -220,25 +232,24 @@ def _extract_non_tensor(data, key: str):
     return _unwrap_non_tensor(val)
 
 
-def _extract_response_mask_rmpad(data, total_nnz: int, device) -> torch.Tensor:
-    """Get a `[total_nnz]` bool tensor marking response token positions in
-    the rmpad layout. The micro-batch carries `response_mask` as a
-    NestedTensor whose `.values()` is exactly the rmpad layout we need."""
+def _extract_response_lens(data, bsz: int, device) -> torch.Tensor:
+    """Return `[B]` int tensor of per-sample response lengths.
+
+    `data["response_mask"]` is a `(bsz, response_len)` NestedTensor whose
+    offsets give cumulative response lengths. Falls back to summing along
+    dim=1 for the dense layout."""
     rm = data["response_mask"]
     if rm.is_nested:
-        flat = rm.values()
+        offs = rm.offsets()  # [B+1]
+        lens = offs.diff().to(device=device, dtype=torch.long)
     else:
-        # Padded layout fallback: flatten via the actual cu_seqlens. This
-        # branch is a defensive escape; verl's standard pad_mode is
-        # NO_PADDING and rm should always be nested.
-        flat = rm.reshape(-1)
-    flat = flat.bool().to(device)
-    if flat.numel() != total_nnz:
+        lens = rm.bool().sum(dim=1).to(device=device, dtype=torch.long)
+    if lens.numel() != bsz:
         raise RuntimeError(
-            f"[EasyOPD:simple] response_mask rmpad length {flat.numel()} "
-            f"does not match student_logits total_nnz {total_nnz}."
+            f"[EasyOPD:simple] response_mask batch size {lens.numel()} "
+            f"does not match cu_seqlens batch size {bsz}."
         )
-    return flat
+    return lens
 
 
 def _extract_input_ids_rmpad(data, total_nnz: int) -> torch.Tensor:
@@ -312,7 +323,7 @@ def compute_simple_xtok_logits_processor(
             "did the agent_loop sidecar populate non_tensor_batch?"
         )
 
-    response_mask_rmpad = _extract_response_mask_rmpad(data, total_nnz, device)
+    response_lens = _extract_response_lens(data, bsz=len(cu_seqlens) - 1, device=device)
     input_ids_rmpad = _extract_input_ids_rmpad(data, total_nnz)
 
     loss_config = distillation_config.distillation_loss
@@ -323,22 +334,30 @@ def compute_simple_xtok_logits_processor(
 
     cu = cu_seqlens.tolist() if torch.is_tensor(cu_seqlens) else list(cu_seqlens)
     bsz = len(cu) - 1
+    resp_lens_cpu = response_lens.detach().cpu().tolist()
 
     total_aligned = 0
     total_response = 0
 
     for b in range(bsz):
         s_lo, s_hi = int(cu[b]), int(cu[b + 1])
-        if s_lo == s_hi:
+        sample_len = s_hi - s_lo
+        if sample_len == 0:
             continue
-
-        # Student response positions WITHIN sample-b's slice.
-        sample_resp_mask = response_mask_rmpad[s_lo:s_hi]
-        local_resp_pos = sample_resp_mask.nonzero(as_tuple=False).squeeze(-1)
-        stu_resp_len = int(local_resp_pos.numel())
-        total_response += stu_resp_len
+        stu_resp_len = int(resp_lens_cpu[b])
         if stu_resp_len == 0:
             continue
+        if stu_resp_len > sample_len:
+            raise RuntimeError(
+                f"[EasyOPD:simple] sample {b}: response_len {stu_resp_len} > "
+                f"sample_len {sample_len} (input_ids rmpad slice)."
+            )
+        # NO_PADDING layout: response segment occupies the trailing
+        # `resp_len` tokens within the sample's rmpad slice.
+        prompt_len = sample_len - stu_resp_len
+        resp_lo_global = s_lo + prompt_len
+        resp_hi_global = s_hi  # exclusive
+        total_response += stu_resp_len
 
         # Teacher hidden states: pre-cropped by sidecar to response positions.
         tea_resp_hs_np: np.ndarray = teacher_hidden_states_arr[b]
@@ -350,11 +369,7 @@ def compute_simple_xtok_logits_processor(
 
         # Student response token ids (used only for decode → tokens).
         stu_resp_ids = (
-            input_ids_rmpad[s_lo:s_hi]
-            .index_select(0, local_resp_pos)
-            .detach()
-            .cpu()
-            .tolist()
+            input_ids_rmpad[resp_lo_global:resp_hi_global].detach().cpu().tolist()
         )
 
         # Greedy character-level alignment.
@@ -374,8 +389,7 @@ def compute_simple_xtok_logits_processor(
         tea_local = torch.tensor(tea_align_idx, dtype=torch.long, device=device)
 
         # Absolute rmpad positions for the aligned student tokens.
-        stu_abs_in_sample = local_resp_pos.index_select(0, stu_local)  # within-sample
-        stu_abs_global = stu_abs_in_sample + s_lo                       # global rmpad
+        stu_abs_global = stu_local + resp_lo_global
 
         # Project teacher hidden → overlap logits.
         tea_hs = torch.from_numpy(tea_resp_hs_np).to(device=device, dtype=dtype)
