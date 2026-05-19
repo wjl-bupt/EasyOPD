@@ -54,11 +54,11 @@ STUDENT_MODEL=${STUDENT_MODEL:-${LOCAL_STUDENT_DIR}/checkpoint-40}
 TEACHER_MODEL=${TEACHER_MODEL:-${LOCAL_TEACHER_DIR}}
 
 NNODES=${NNODES:-1}
-NGPUS_PER_NODE=${NGPUS_PER_NODE:-8}
-# KDFlow runs the teacher with --teacher_dp_size 8 --teacher_tp_size 1, so
-# total teacher world size is 8. verl's distillation runtime instead
-# re-uses the same node, so we keep TEACHER_WORLD_SIZE configurable.
-TEACHER_WORLD_SIZE=${TEACHER_WORLD_SIZE:-8}
+# On an 8-GPU node, verl accounts the student actor/rollout pool and the
+# EasyOPD teacher sidecar pool separately. Keep the defaults within the
+# physical node: 6 GPUs for student actor/rollout + 2 GPUs for teacher.
+NGPUS_PER_NODE=${NGPUS_PER_NODE:-6}
+TEACHER_WORLD_SIZE=${TEACHER_WORLD_SIZE:-2}
 
 # `simple` is a cross-tokenizer KD mode. We bypass top-k / response_length=1
 # rewrites in the teacher rollout config (handled by verl, gated on
