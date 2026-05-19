@@ -182,6 +182,7 @@ def distillation_ppo_loss(
     dp_group=None,
     student_logits: torch.Tensor = None,
     data_format: str = "thd",
+    cu_seqlens: torch.Tensor = None,
 ):
     """Loss function used both for logit processor and final policy loss.
     - student_logits is not None, compute the topk loss in logit processor.
@@ -206,6 +207,9 @@ def distillation_ppo_loss(
           - teacher_ids: (bsz, seqlen, topk)
         student_logits: (bsz, seqlen/cp_size, vocab_size/tp_size).
         data_format: "thd" or "bshd", models not support THD format, e.g GPT-OSS, Qwen3.5
+        cu_seqlens: optional [B+1] int sample boundaries, required by
+            cross-tokenizer losses (e.g. EasyOPD `simple`) when running on
+            rmpad logits.
 
     Returns:
     - student_logits is not None, return the topk loss tensor (bsz, seqlen/cp_size).
@@ -214,6 +218,22 @@ def distillation_ppo_loss(
 
     # Called as logits processor
     if student_logits is not None:
+        # [EasyOPD:simple] route cross-tokenizer losses to the EasyOPD path.
+        loss_settings = distillation_config.distillation_loss.loss_settings
+        if getattr(loss_settings, "use_cross_tokenizer", False):
+            from easyopd.methods.simple.losses import (
+                compute_simple_xtok_logits_processor,
+            )
+
+            distillation_losses = compute_simple_xtok_logits_processor(
+                student_logits=student_logits,
+                data=data,
+                cu_seqlens=cu_seqlens,
+                config=config,
+                distillation_config=distillation_config,
+            )
+            return {"distillation_losses": distillation_losses}
+        # [EasyOPD:simple] End
         return compute_topk_loss(config, distillation_config, data, student_logits, data_format)
 
     # Called as final policy loss

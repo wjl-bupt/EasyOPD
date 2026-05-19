@@ -1,39 +1,38 @@
 # Copyright 2026 EasyOPD Contributors
 #
 # Cross-tokenizer KD loss (`simple`) plugged into verl's on-policy
-# distillation framework.
+# distillation framework via the **logit-processor** protocol — same
+# mechanism `forward_kl_topk` uses.
 #
-# Data flow (after teacher sidecar refactor):
+# Two-stage data flow:
 #
-#     1. AgentLoopWorker._postprocess collects per-sample teacher hidden
-#        states from the EasyOPD `simple` sidecar and stuffs them into
-#        `non_tensor_batch` as variable-length numpy object arrays:
-#            - teacher_hidden_states   (object)  np.ndarray[N_i, H]
-#            - teacher_input_ids       (object)  np.ndarray[T_i]
-#            - teacher_loss_mask       (object)  np.ndarray[T_i] bool
-#            - student_response_text   (object)  decoded student responses
+#   Stage 1 (logit-processor, called inside the FSDP forward pass):
+#     `compute_simple_xtok_logits_processor`
+#       in : student_logits = [1, total_nnz, V_stu]   ← rmpad
+#            data            : TensorDict (with non_tensor_batch attached)
+#            cu_seqlens      : [B+1] int — sample boundaries within total_nnz
+#       out: {"distillation_losses": [1, total_nnz]}  — per-token KL,
+#            zero at prompt positions and at unaligned response positions.
 #
-#     2. The student worker forwards a normal verl mini-batch through
-#        FSDP/Megatron and arrives here for distillation loss.
+#   Stage 2 (final policy loss, called inside `distillation_loss`):
+#     `compute_distillation_loss_simple_cross_tokenizer`
+#       reads `model_output["distillation_losses"]` (NestedTensor stored
+#       by stage 1 via `torch.nested.nested_tensor_from_jagged`),
+#       converts it to padded `[B, resp_len]`, returns metrics. Mirrors
+#       `compute_forward_kl_topk` exactly.
 #
-#     3. We project hidden states to overlap logits using a
-#        process-singleton frozen `lm_head` loaded by `teacher_lm_head.py`
-#        (one copy per Python process, shared across micro-batches).
-#
-#     4. We align student/teacher response tokens via
-#        `align_sequences()` and accumulate KL on the overlap sub-vocab.
-#
-# Contract: matches verl's loss-fn contract:
-#     fn(config, distillation_config, model_output, data)
-#         -> (distillation_losses, metrics_dict)
-# where `distillation_losses` is `[B, resp_len]` zeros at unaligned/non-
-# response positions.
+# Per-sample teacher payload (numpy object arrays of length B, attached
+# by the EasyOPD sidecar in `agent_loop._postprocess`):
+#   - teacher_hidden_states  np.ndarray[N_i, H]   (last-layer, response only)
+#   - teacher_input_ids      np.ndarray[T_i]      (full teacher sequence)
+#   - teacher_loss_mask      np.ndarray[T_i] bool (response positions)
 
 from __future__ import annotations
 
 import logging
+import os
 import threading
-from typing import Any, List, Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import numpy as np
 import torch
@@ -46,6 +45,7 @@ logger = logging.getLogger(__name__)
 
 
 __all__ = [
+    "compute_simple_xtok_logits_processor",
     "compute_distillation_loss_simple_cross_tokenizer",
     "register_simple_loss",
 ]
@@ -53,9 +53,7 @@ __all__ = [
 
 # ---------------------------------------------------------------------------
 # Process-level singletons: teacher lm_head + tokenizers + overlap ids.
-#
-# These are loaded lazily on the FIRST call to the loss function, on the
-# device of the incoming model output. All subsequent calls reuse them.
+# Loaded lazily on the first call, on the device of the incoming logits.
 # ---------------------------------------------------------------------------
 
 _LOCK = threading.Lock()
@@ -122,8 +120,6 @@ def _ensure_singletons(
                 "[EasyOPD:simple] overlap vocab size: %d", _STUDENT_OVERLAP_IDS.numel()
             )
         elif _TEACHER_LM_HEAD_DEVICE != device:
-            # Re-locate to the new device on demand (tensor parallel may
-            # invoke loss fn from a different rank's GPU).
             _TEACHER_LM_HEAD = _TEACHER_LM_HEAD.to(device)
             _TEACHER_LM_HEAD_DEVICE = device
             _STUDENT_OVERLAP_IDS = _STUDENT_OVERLAP_IDS.to(device)
@@ -152,7 +148,7 @@ def register_simple_loss() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# KL helpers
 # ---------------------------------------------------------------------------
 
 def _kl_div(
@@ -176,100 +172,125 @@ def _kl_div(
     return kl
 
 
-# ---------------------------------------------------------------------------
-# Loss function
-# ---------------------------------------------------------------------------
-
-def compute_distillation_loss_simple_cross_tokenizer(
-    config,
-    distillation_config,
-    model_output: dict,
-    data,
-) -> Tuple[torch.Tensor, dict]:
-    """Cross-tokenizer KD loss matching verl's loss-fn contract.
-
-    Required student-side keys in `model_output`:
-        - "logits": [B, S, V_stu]  (student logits at all positions)
-
-    Required keys in `data` (TensorDict):
-        - "response_mask":     [B, S] bool/int — student response mask.
-        - "responses":         [B, resp_len] — student response token ids.
-        - "prompts":           [B, prompt_len] — student prompt ids.
-
-    Required non-tensor keys in `data` (numpy object arrays of length B):
-        - "teacher_hidden_states":  np.ndarray[N_i, H] per sample
-        - "teacher_input_ids":      np.ndarray[T_i]
-        - "teacher_loss_mask":      np.ndarray[T_i] bool
-
-    Returns:
-        distillation_losses: [B, S] (zeros at unaligned / non-response positions)
-        metrics: dict with `distillation/align_ratio`,
-                 `distillation/overlap_vocab_size`.
-    """
-    response_mask: torch.Tensor = data["response_mask"]
-    if response_mask.is_nested:
-        response_mask_dense = response_mask.bool().to_padded_tensor(False)
-    else:
-        response_mask_dense = response_mask.bool()
-
-    student_logits: torch.Tensor = model_output["logits"]
-    bsz, seq_len = student_logits.shape[:2]
-    device = student_logits.device
-    dtype = student_logits.dtype
-
-    student_input_ids = data["input_ids"] if "input_ids" in data.keys() else None
-    if student_input_ids is None:
-        # verl fallback: concat prompts + responses.
-        student_input_ids = torch.cat([data["prompts"], data["responses"]], dim=1)
-
-    # Pull non-tensor batch entries. They are stored on `data.non_tensor_batch`
-    # in DataProto; verl's downstream logic typically merges them into `data`
-    # as a dict-like attribute, but to be safe we read from both places.
-    nt = getattr(data, "non_tensor_batch", None) or {}
-    teacher_hidden_states_arr = nt.get("teacher_hidden_states", None)
-    teacher_input_ids_arr = nt.get("teacher_input_ids", None)
-    teacher_loss_mask_arr = nt.get("teacher_loss_mask", None)
-    if teacher_hidden_states_arr is None:
-        # Allow callers that placed the arrays directly into `data` (TensorDict
-        # with object-typed entries is unusual but possible during testing).
-        teacher_hidden_states_arr = data.get("teacher_hidden_states")
-        teacher_input_ids_arr = data.get("teacher_input_ids")
-        teacher_loss_mask_arr = data.get("teacher_loss_mask")
-
-    if teacher_hidden_states_arr is None:
-        raise KeyError(
-            "[EasyOPD:simple] teacher_hidden_states not found in data; "
-            "did the agent_loop sidecar populate non_tensor_batch?"
-        )
-
-    # Unwrap verl's NonTensorData wrappers if present (TensorDict stores
-    # non-tensor batch values via NonTensorData, which exposes `.data`).
-    from verl.utils.tensordict_utils import unwrap_non_tensor_data
-
-    teacher_hidden_states_arr = unwrap_non_tensor_data(teacher_hidden_states_arr)
-    teacher_input_ids_arr = unwrap_non_tensor_data(teacher_input_ids_arr)
-    teacher_loss_mask_arr = unwrap_non_tensor_data(teacher_loss_mask_arr)
-
-    # Resolve student tokenizer path. ActorConfig does not carry the
-    # model path directly, so we rely on a process-level environment
-    # variable that the student worker sets in `engine_workers.py` from
-    # `self.config.model.path` at init time.
-    import os as _os
-
-    student_path = _os.environ.get("EASYOPD_STUDENT_MODEL_PATH")
-    if student_path is None:
-        # Fall back to attribute lookups for unit-test contexts.
-        student_path = getattr(config, "student_model_path", None) or getattr(
-            config, "model_path", None
-        )
-        if student_path is None and hasattr(config, "model"):
-            student_path = getattr(config.model, "path", None)
+def _resolve_student_path(config) -> str:
+    """Locate the student tokenizer path. Prefers the env var set by
+    `engine_workers.py` at student-worker init; falls back to attribute
+    lookups (useful in unit tests)."""
+    student_path = os.environ.get("EASYOPD_STUDENT_MODEL_PATH")
+    if student_path is not None:
+        return student_path
+    student_path = getattr(config, "student_model_path", None) or getattr(
+        config, "model_path", None
+    )
+    if student_path is None and hasattr(config, "model"):
+        student_path = getattr(config.model, "path", None)
     if student_path is None:
         raise RuntimeError(
             "[EasyOPD:simple] cannot resolve student model path; "
             "set EASYOPD_STUDENT_MODEL_PATH environment variable."
         )
+    return student_path
 
+
+def _unwrap_non_tensor(arr):
+    """Best-effort unwrap of verl `NonTensorData` wrappers; passes through
+    plain numpy arrays unchanged. We avoid a hard dependency on
+    `verl.utils.tensordict_utils` to keep unit tests lightweight."""
+    if arr is None:
+        return None
+    # verl NonTensorData exposes `.data`; numpy arrays do not.
+    if hasattr(arr, "data") and not isinstance(arr, np.ndarray):
+        return arr.data
+    return arr
+
+
+def _extract_non_tensor(data, key: str):
+    """Pull a non-tensor entry from a verl micro-batch.
+
+    `data` may be either a `DataProto` (has `non_tensor_batch`) or a
+    `TensorDict` (in which case object-typed fields are stored as
+    NonTensorData and reachable via `data.get(key)`)."""
+    nt = getattr(data, "non_tensor_batch", None)
+    if nt is not None and key in nt:
+        return _unwrap_non_tensor(nt[key])
+    try:
+        val = data.get(key)
+    except Exception:  # noqa: BLE001
+        val = None
+    return _unwrap_non_tensor(val)
+
+
+def _extract_response_mask_rmpad(data, total_nnz: int, device) -> torch.Tensor:
+    """Get a `[total_nnz]` bool tensor marking response token positions in
+    the rmpad layout. The micro-batch carries `response_mask` as a
+    NestedTensor whose `.values()` is exactly the rmpad layout we need."""
+    rm = data["response_mask"]
+    if rm.is_nested:
+        flat = rm.values()
+    else:
+        # Padded layout fallback: flatten via the actual cu_seqlens. This
+        # branch is a defensive escape; verl's standard pad_mode is
+        # NO_PADDING and rm should always be nested.
+        flat = rm.reshape(-1)
+    flat = flat.bool().to(device)
+    if flat.numel() != total_nnz:
+        raise RuntimeError(
+            f"[EasyOPD:simple] response_mask rmpad length {flat.numel()} "
+            f"does not match student_logits total_nnz {total_nnz}."
+        )
+    return flat
+
+
+def _extract_input_ids_rmpad(data, total_nnz: int) -> torch.Tensor:
+    """Get a `[total_nnz]` long tensor of token ids in rmpad layout."""
+    ids = data["input_ids"]
+    if ids.is_nested:
+        flat = ids.values()
+    else:
+        flat = ids.reshape(-1)
+    if flat.numel() != total_nnz:
+        raise RuntimeError(
+            f"[EasyOPD:simple] input_ids rmpad length {flat.numel()} "
+            f"does not match student_logits total_nnz {total_nnz}."
+        )
+    return flat
+
+
+# ---------------------------------------------------------------------------
+# Stage 1: logit-processor (does the heavy lifting on student logits)
+# ---------------------------------------------------------------------------
+
+def compute_simple_xtok_logits_processor(
+    student_logits: torch.Tensor,
+    data,
+    cu_seqlens: torch.Tensor,
+    config,
+    distillation_config,
+) -> torch.Tensor:
+    """Compute per-token cross-tokenizer KL **inside the forward pass**,
+    while student_logits is still resident.
+
+    Args:
+        student_logits: `[1, total_nnz, V_stu]` rmpad logits, post-temperature.
+        data:           TensorDict / DataProto with non_tensor_batch attached.
+        cu_seqlens:     `[B+1]` int — rmpad sample boundaries.
+        config:         ActorConfig.
+        distillation_config: DistillationConfig.
+
+    Returns:
+        `[1, total_nnz]` float tensor — per-token KL on the overlap
+        sub-vocab; zero at prompt positions and at unaligned response
+        positions. Caller (fsdp `prepare_model_outputs`) wraps this into a
+        NestedTensor and stuffs it into `model_output["distillation_losses"]`.
+    """
+    assert student_logits.dim() == 3 and student_logits.shape[0] == 1, (
+        f"expected student_logits [1, total_nnz, V], got {tuple(student_logits.shape)}"
+    )
+    total_nnz = student_logits.shape[1]
+    device = student_logits.device
+    dtype = student_logits.dtype
+
+    student_path = _resolve_student_path(config)
     _ensure_singletons(
         distillation_config=distillation_config,
         student_tokenizer_path=student_path,
@@ -282,42 +303,63 @@ def compute_distillation_loss_simple_cross_tokenizer(
     student_overlap_ids = _STUDENT_OVERLAP_IDS
     teacher_overlap_ids = _TEACHER_OVERLAP_IDS
 
+    teacher_hidden_states_arr = _extract_non_tensor(data, "teacher_hidden_states")
+    teacher_input_ids_arr = _extract_non_tensor(data, "teacher_input_ids")
+    teacher_loss_mask_arr = _extract_non_tensor(data, "teacher_loss_mask")
+    if teacher_hidden_states_arr is None:
+        raise KeyError(
+            "[EasyOPD:simple] teacher_hidden_states not found; "
+            "did the agent_loop sidecar populate non_tensor_batch?"
+        )
+
+    response_mask_rmpad = _extract_response_mask_rmpad(data, total_nnz, device)
+    input_ids_rmpad = _extract_input_ids_rmpad(data, total_nnz)
+
     loss_config = distillation_config.distillation_loss
     direction = getattr(loss_config, "cross_tokenizer_kl_direction", "forward")
 
-    distillation_losses = torch.zeros(
-        (bsz, seq_len), dtype=student_logits.dtype, device=device
-    )
+    # Output buffer in rmpad layout (zeros = no signal).
+    out = torch.zeros((total_nnz,), dtype=dtype, device=device)
+
+    cu = cu_seqlens.tolist() if torch.is_tensor(cu_seqlens) else list(cu_seqlens)
+    bsz = len(cu) - 1
 
     total_aligned = 0
     total_response = 0
 
     for b in range(bsz):
-        # Student-side response positions.
-        stu_resp_pos = response_mask_dense[b].nonzero(as_tuple=False).squeeze(-1)
-        stu_resp_len = int(stu_resp_pos.numel())
+        s_lo, s_hi = int(cu[b]), int(cu[b + 1])
+        if s_lo == s_hi:
+            continue
+
+        # Student response positions WITHIN sample-b's slice.
+        sample_resp_mask = response_mask_rmpad[s_lo:s_hi]
+        local_resp_pos = sample_resp_mask.nonzero(as_tuple=False).squeeze(-1)
+        stu_resp_len = int(local_resp_pos.numel())
         total_response += stu_resp_len
         if stu_resp_len == 0:
             continue
 
-        # Teacher hidden states are pre-cropped by the sidecar to the
-        # response positions only (using `loss_mask`), so they ARE the
-        # teacher response tokens, length matches `teacher_loss_mask.sum()`.
+        # Teacher hidden states: pre-cropped by sidecar to response positions.
         tea_resp_hs_np: np.ndarray = teacher_hidden_states_arr[b]
         if tea_resp_hs_np is None or tea_resp_hs_np.shape[0] == 0:
             continue
         tea_input_ids_np: np.ndarray = teacher_input_ids_arr[b]
         tea_loss_mask_np: np.ndarray = teacher_loss_mask_arr[b].astype(bool)
-        # Teacher response token ids (length-aligned with hidden states).
         tea_resp_ids = tea_input_ids_np[tea_loss_mask_np].tolist()
 
-        # Student response token ids.
-        stu_resp_ids = student_input_ids[b][stu_resp_pos].detach().cpu().tolist()
+        # Student response token ids (used only for decode → tokens).
+        stu_resp_ids = (
+            input_ids_rmpad[s_lo:s_hi]
+            .index_select(0, local_resp_pos)
+            .detach()
+            .cpu()
+            .tolist()
+        )
 
-        # Decode tokens for greedy character-level alignment.
+        # Greedy character-level alignment.
         stu_tokens = student_tokenizer.convert_ids_to_tokens(stu_resp_ids)
         tea_tokens = teacher_tokenizer.convert_ids_to_tokens(tea_resp_ids)
-
         tea_align_idx, stu_align_idx = align_sequences(
             tea_tokens,
             stu_tokens,
@@ -331,24 +373,23 @@ def compute_distillation_loss_simple_cross_tokenizer(
         stu_local = torch.tensor(stu_align_idx, dtype=torch.long, device=device)
         tea_local = torch.tensor(tea_align_idx, dtype=torch.long, device=device)
 
-        # Convert local indices into:
-        #   * absolute student positions in [seq_len]
-        #   * teacher hidden-state row indices (already 0..N-1 in tea_resp_hs)
-        stu_abs = stu_resp_pos.index_select(dim=0, index=stu_local)
+        # Absolute rmpad positions for the aligned student tokens.
+        stu_abs_in_sample = local_resp_pos.index_select(0, stu_local)  # within-sample
+        stu_abs_global = stu_abs_in_sample + s_lo                       # global rmpad
 
-        # Project teacher hidden states to logits, column-crop to overlap.
+        # Project teacher hidden → overlap logits.
         tea_hs = torch.from_numpy(tea_resp_hs_np).to(device=device, dtype=dtype)
-        tea_hs_aligned = tea_hs.index_select(dim=0, index=tea_local)  # [N, H]
+        tea_hs_aligned = tea_hs.index_select(0, tea_local)              # [N, H]
         with torch.no_grad():
-            tea_full_logits = teacher_lm_head(tea_hs_aligned)         # [N, V_tea]
+            tea_full_logits = teacher_lm_head(tea_hs_aligned)           # [N, V_tea]
         tea_logits_overlap = tea_full_logits.index_select(
-            dim=-1, index=teacher_overlap_ids
-        )  # [N, K]
+            -1, teacher_overlap_ids
+        )                                                                # [N, K]
 
-        # Student: gather, then column-crop.
-        stu_logits_full = student_logits[b].index_select(dim=0, index=stu_abs)
+        # Student: gather the aligned positions, then column-crop.
+        stu_logits_full = student_logits[0].index_select(0, stu_abs_global)
         stu_logits_overlap = stu_logits_full.index_select(
-            dim=-1, index=student_overlap_ids
+            -1, student_overlap_ids
         )
 
         if stu_logits_overlap.shape != tea_logits_overlap.shape:
@@ -359,26 +400,72 @@ def compute_distillation_loss_simple_cross_tokenizer(
             )
 
         kl_per_pos = _kl_div(stu_logits_overlap, tea_logits_overlap, direction)
-        distillation_losses[b].index_copy_(
-            0, stu_abs, kl_per_pos.to(distillation_losses.dtype)
-        )
+        out.index_copy_(0, stu_abs_global, kl_per_pos.to(dtype))
 
     align_ratio = float(total_aligned) / max(total_response, 1)
-
     if align_ratio < 0.5:
         logger.warning(
             "[EasyOPD:simple] align_ratio=%.3f below 0.5; KD signal may be weak.",
             align_ratio,
         )
 
+    return out.unsqueeze(0)  # [1, total_nnz]
+
+
+# ---------------------------------------------------------------------------
+# Stage 2: final policy loss assembly (mirrors compute_forward_kl_topk)
+# ---------------------------------------------------------------------------
+
+def compute_distillation_loss_simple_cross_tokenizer(
+    config,
+    distillation_config,
+    model_output: dict,
+    data,
+) -> Tuple[torch.Tensor, dict]:
+    """Final policy-loss-side wrapper.
+
+    Stage 1 has already populated `model_output["distillation_losses"]`
+    with a NestedTensor of per-token KL values (zeros outside response /
+    unaligned positions). We just convert to padded `[B, resp_len]` and
+    return metrics. Heavy lifting lives in
+    `compute_simple_xtok_logits_processor`.
+    """
+    from verl.workers.utils.padding import no_padding_2_padding
+
+    if "distillation_losses" not in model_output:
+        raise KeyError(
+            "[EasyOPD:simple] model_output['distillation_losses'] missing — "
+            "stage-1 logit processor was not invoked. Check that "
+            "DistillationLossSettings(use_cross_tokenizer=True) was registered "
+            "and that the FSDP engine routes through "
+            "`compute_simple_xtok_logits_processor`."
+        )
+
+    distillation_losses = no_padding_2_padding(
+        model_output["distillation_losses"], data
+    )
+
+    if data["response_mask"].is_nested:
+        response_mask_bool = data["response_mask"].bool().to_padded_tensor(False)
+    else:
+        response_mask_bool = data["response_mask"].bool()
+    assert distillation_losses.shape == response_mask_bool.shape, (
+        f"shape mismatch: distillation_losses={tuple(distillation_losses.shape)} "
+        f"vs response_mask={tuple(response_mask_bool.shape)}"
+    )
+
+    # Forward KL is non-negative; reverse KL too. Numerical noise can push
+    # values slightly below zero in fp16/bf16 — clamp to be safe.
+    distillation_losses = distillation_losses.clamp_min(0.0)
+
     from verl.utils.metric import AggregationType, Metric
 
     metrics: dict = {
-        "distillation/align_ratio": Metric(
-            AggregationType.MEAN, torch.tensor(align_ratio)
-        ),
         "distillation/overlap_vocab_size": Metric(
-            AggregationType.MEAN, torch.tensor(float(student_overlap_ids.numel()))
+            AggregationType.MEAN,
+            torch.tensor(
+                float(_STUDENT_OVERLAP_IDS.numel()) if _STUDENT_OVERLAP_IDS is not None else 0.0
+            ),
         ),
     }
     return distillation_losses, metrics

@@ -1219,6 +1219,13 @@ class RayPPOTrainer:
             if is_distillation_enabled(self.config.get("distillation"))
             else False
         )
+        # [EasyOPD:simple]
+        distillation_use_cross_tokenizer = (
+            self.distillation_config.distillation_loss.loss_settings.use_cross_tokenizer
+            if is_distillation_enabled(self.config.get("distillation"))
+            else False
+        )
+        # [EasyOPD:simple] End
         ppo_mini_batch_size = self.config.actor_rollout_ref.actor.ppo_mini_batch_size
         ppo_mini_batch_size = ppo_mini_batch_size * self.config.actor_rollout_ref.rollout.n
         ppo_epochs = self.config.actor_rollout_ref.actor.ppo_epochs
@@ -1228,6 +1235,7 @@ class RayPPOTrainer:
             batch_td,
             calculate_entropy=calculate_entropy,
             distillation_use_topk=distillation_use_topk,
+            distillation_use_cross_tokenizer=distillation_use_cross_tokenizer,
             global_batch_size=ppo_mini_batch_size,
             mini_batch_size=ppo_mini_batch_size,
             epochs=ppo_epochs,

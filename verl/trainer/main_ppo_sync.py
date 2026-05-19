@@ -1475,9 +1475,17 @@ class PPOTrainer:
             if is_distillation_enabled(self.config.get("distillation"))
             else False
         )
+        # [EasyOPD:simple]
+        distillation_use_cross_tokenizer = (
+            self.distillation_config.distillation_loss.loss_settings.use_cross_tokenizer
+            if is_distillation_enabled(self.config.get("distillation"))
+            else False
+        )
+        # [EasyOPD:simple] End
         extra_info = {
             "calculate_entropy": calculate_entropy,
             "distillation_use_topk": distillation_use_topk,
+            "distillation_use_cross_tokenizer": distillation_use_cross_tokenizer,
             "global_batch_size": ppo_mini_batch_size,
             "mini_batch_size": ppo_mini_batch_size,
             "epochs": self.config.actor_rollout_ref.actor.ppo_epochs,
