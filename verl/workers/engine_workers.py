@@ -459,6 +459,18 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         self._is_rollout = self.role in ["rollout", "actor_rollout", "actor_rollout_ref"]
         self._is_ref = self.role in ["ref", "actor_rollout_ref"]
 
+        # [EasyOPD:simple]
+        # Expose the student model path to the EasyOPD `simple` loss fn
+        # via an env var; the loss fn needs the student tokenizer to
+        # decode response tokens for cross-tokenizer alignment.
+        try:
+            student_path = self.config.model.path
+            if student_path:
+                os.environ["EASYOPD_STUDENT_MODEL_PATH"] = str(student_path)
+        except Exception:
+            pass
+        # [EasyOPD:simple] End
+
         if self._is_actor:
             omega_profiler_config = config.actor.get("profiler", {})
         elif self._is_rollout:

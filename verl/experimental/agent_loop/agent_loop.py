@@ -400,7 +400,31 @@ class AgentLoopWorker:
 
         # Online policy distillation
         self.distillation_enabled = is_distillation_enabled(config.distillation)
+        # [EasyOPD:simple]
+        # Detect cross-tokenizer mode: in this case `teacher_client` is a
+        # dict mapping teacher_key -> EasyOPDSimpleTeacherSidecar (NOT an
+        # LLMServerClient). We bypass verl's vllm/sglang teacher manager
+        # entirely and instead batch-call the sidecar from `_postprocess`.
+        self._easyopd_simple_sidecar = None
         if self.distillation_enabled:
+            try:
+                from easyopd.methods.simple.teacher_sidecar import (
+                    EasyOPDSimpleTeacherSidecar,
+                )
+            except Exception:
+                EasyOPDSimpleTeacherSidecar = None  # type: ignore
+            if (
+                EasyOPDSimpleTeacherSidecar is not None
+                and isinstance(teacher_client, dict)
+                and len(teacher_client) > 0
+                and isinstance(
+                    next(iter(teacher_client.values())), EasyOPDSimpleTeacherSidecar
+                )
+            ):
+                self._easyopd_simple_sidecar = next(iter(teacher_client.values()))
+                self.teacher_key: str = config.distillation.teacher_key
+        # [EasyOPD:simple] End
+        if self.distillation_enabled and self._easyopd_simple_sidecar is None:
             from verl.experimental.teacher_loop.teacher_manager import AsyncTeacherLLMServerManager
 
             self.teacher_key: str = config.distillation.teacher_key
@@ -876,6 +900,13 @@ class AgentLoopWorker:
         sample_kwargs: Optional[dict[str, Any]] = None,
     ) -> None:
         """Compute teacher logprobs for single sample."""
+        # [EasyOPD:simple]
+        # Cross-tokenizer mode: teacher inference is batched in
+        # `_postprocess` against the EasyOPD sidecar; nothing to do
+        # per-sample here.
+        if self._easyopd_simple_sidecar is not None:
+            return
+        # [EasyOPD:simple] End
         if self.distillation_enabled and not validate:
             routing_key = None
             if sample_kwargs is not None:
@@ -928,6 +959,21 @@ class AgentLoopWorker:
             batch_size=len(inputs),
         )
 
+        # [EasyOPD:simple]
+        # Cross-tokenizer mode: batch-call the EasyOPD sidecar to compute
+        # teacher hidden states for all (prompt, response) pairs in this
+        # micro-batch, then attach them to non_tensor_batch as variable-
+        # length numpy object arrays so the student worker can do the
+        # lm_head projection + alignment + KL locally.
+        easyopd_simple_extra = None
+        if (
+            self._easyopd_simple_sidecar is not None
+            and not validate
+            and len(inputs) > 0
+        ):
+            easyopd_simple_extra = self._compute_easyopd_simple_teacher_outputs(inputs)
+        # [EasyOPD:simple] End
+
         scores = [input.reward_score for input in inputs]
         if all(score is not None for score in scores):
             prompt_length = prompt_ids.size(1)
@@ -941,6 +987,12 @@ class AgentLoopWorker:
         }
         if self.reward_loop_worker_handles is None and input_non_tensor_batch:
             non_tensor_batch.update(input_non_tensor_batch)
+
+        # [EasyOPD:simple]
+        if easyopd_simple_extra is not None:
+            for k, arr in easyopd_simple_extra.items():
+                non_tensor_batch[k] = arr
+        # [EasyOPD:simple] End
 
         # add reward_extra_info to non_tensor_batch
         reward_extra_infos = [input.extra_fields.get("reward_extra_info", {}) for input in inputs]
@@ -984,6 +1036,82 @@ class AgentLoopWorker:
             non_tensor_batch=non_tensor_batch,
             meta_info=meta_info,
         )
+
+    # [EasyOPD:simple]
+    def _compute_easyopd_simple_teacher_outputs(
+        self, inputs: list["_InternalAgentLoopOutput"]
+    ) -> dict:
+        """Batch-call the EasyOPD `simple` teacher sidecar.
+
+        For each sample in `inputs`, decode the (prompt, response) ids back
+        to text using the student tokenizer, re-tokenize with the teacher
+        tokenizer (inside the sidecar), build a teacher-side response
+        loss_mask, and dispatch the whole batch to the SGLang teacher
+        actor pool.
+
+        Returns a dict to be merged into `non_tensor_batch`:
+            * teacher_hidden_states:  np.ndarray[object], one np.ndarray
+              per sample of shape [num_loss_tokens, H].
+            * teacher_input_ids:      np.ndarray[object], one np.ndarray
+              of int64 ids per sample of shape [T_i].
+            * teacher_loss_mask:      np.ndarray[object], bool[T_i].
+            * student_response_text:  np.ndarray[object], decoded
+              student response strings (used downstream for alignment).
+        """
+        sidecar = self._easyopd_simple_sidecar
+        assert sidecar is not None
+
+        full_texts: list[str] = []
+        teacher_loss_masks: list[np.ndarray] = []
+        teacher_input_ids_list: list[np.ndarray] = []
+        student_response_texts: list[str] = []
+
+        for inp in inputs:
+            # `prompt_ids`/`response_ids` are [1, L] tensors after agent loop
+            # padding; squeeze to [L] before decoding.
+            prompt_ids_1d = inp.prompt_ids.squeeze(0).tolist()
+            response_ids_1d = inp.response_ids.squeeze(0).tolist()
+            # Strip pad tokens.
+            pad_id = self.tokenizer.pad_token_id
+            prompt_ids_clean = [i for i in prompt_ids_1d if i != pad_id]
+            response_ids_clean = [i for i in response_ids_1d if i != pad_id]
+
+            prompt_text = self.tokenizer.decode(
+                prompt_ids_clean, skip_special_tokens=False
+            )
+            response_text = self.tokenizer.decode(
+                response_ids_clean, skip_special_tokens=False
+            )
+            tea_ids, tea_mask, full_text = sidecar.encode_for_teacher(
+                prompt_text=prompt_text,
+                response_text=response_text,
+            )
+            full_texts.append(full_text)
+            teacher_loss_masks.append(tea_mask)
+            teacher_input_ids_list.append(np.asarray(tea_ids, dtype=np.int64))
+            student_response_texts.append(response_text)
+
+        hidden_states_list = sidecar.compute_hidden_states_batch(
+            prompts=full_texts, loss_masks=teacher_loss_masks
+        )
+
+        n = len(inputs)
+        hs_arr = np.empty(n, dtype=object)
+        hs_arr[:] = hidden_states_list
+        ids_arr = np.empty(n, dtype=object)
+        ids_arr[:] = teacher_input_ids_list
+        mask_arr = np.empty(n, dtype=object)
+        mask_arr[:] = teacher_loss_masks
+        resp_text_arr = np.empty(n, dtype=object)
+        resp_text_arr[:] = student_response_texts
+
+        return {
+            "teacher_hidden_states": hs_arr,
+            "teacher_input_ids": ids_arr,
+            "teacher_loss_mask": mask_arr,
+            "student_response_text": resp_text_arr,
+        }
+    # [EasyOPD:simple] End
 
 
 async def get_trajectory_info(step, index, validate):

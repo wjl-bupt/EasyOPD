@@ -52,20 +52,32 @@ class DistillationLossSettings(BaseConfig):
         names (str | list[str]): Name(s) to register the distillation loss function under.
         use_topk (bool): Whether the loss function uses top-k log probabilities.
         use_estimator (bool): Whether the loss function uses single-sample KL estimators.
+        use_cross_tokenizer (bool): Whether the loss function operates across two
+            different tokenizers (student vs. teacher) and therefore needs the teacher's
+            full overlap-vocabulary logits rather than top-k logprobs / on-policy logprobs.
+            Added by EasyOPD `simple` method.
     """
 
     names: str | list[str] = field(default_factory=list)
     use_topk: bool = False
     use_estimator: bool = False
+    # [EasyOPD:simple]
+    use_cross_tokenizer: bool = False
+    # [EasyOPD:simple] End
 
     _mutable_fields = {"names"}
 
     def __post_init__(self):
         self.names = [self.names] if isinstance(self.names, str) else self.names
-        if sum([self.use_topk, self.use_estimator]) != 1:
+        # [EasyOPD:simple]
+        # Relax the original 2-way mutual exclusivity to 3-way to admit
+        # cross-tokenizer losses (e.g. EasyOPD `simple`).
+        if sum([self.use_topk, self.use_estimator, self.use_cross_tokenizer]) != 1:
             raise ValueError(
-                f"Expected only one of use_estimator, use_topk, but got {self.use_estimator=}, {self.use_topk=}."
+                "Expected exactly one of use_estimator, use_topk, use_cross_tokenizer, "
+                f"but got {self.use_estimator=}, {self.use_topk=}, {self.use_cross_tokenizer=}."
             )
+        # [EasyOPD:simple] End
 
 
 DISTILLATION_LOSS_REGISTRY: dict[str, DistillationLossFn] = {}
@@ -368,3 +380,23 @@ def compute_distillation_loss_reverse_kl_estimator(
         "distillation/abs_loss": Metric(AggregationType.MEAN, distillation_losses[response_mask_bool].abs().mean()),
     }
     return distillation_losses, metrics
+
+
+# [EasyOPD:simple]
+# Register the EasyOPD `simple` cross-tokenizer KD loss. The actual loss
+# implementation lives in `easyopd/methods/simple/losses.py`; we only
+# trigger registration here so that `loss_mode=simple` resolves correctly
+# via `get_distillation_loss_fn`. The import is wrapped in try/except so
+# that environments without EasyOPD (e.g. pure verl checkouts) keep
+# working — `loss_mode=simple` will simply be unavailable.
+try:
+    from easyopd.methods.simple.losses import register_simple_loss as _register_simple_loss
+
+    _register_simple_loss()
+except Exception as _easyopd_simple_err:  # pragma: no cover - defensive
+    import logging as _logging
+
+    _logging.getLogger(__name__).debug(
+        "EasyOPD `simple` distillation loss not registered: %s", _easyopd_simple_err
+    )
+# [EasyOPD:simple] End

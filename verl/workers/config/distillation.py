@@ -75,6 +75,14 @@ class DistillationLossConfig(BaseConfig):
     clip_ratio_low: float = 0.2
     clip_ratio_high: float = 0.2
 
+    # [EasyOPD:simple]
+    # Cross-tokenizer KL direction for the EasyOPD `simple` loss. Ignored
+    # for all other loss_modes. Allowed values: "forward" (KL(student || teacher))
+    # or "reverse" (KL(teacher || student)). Default matches KDFlow's
+    # forward-KL convention.
+    cross_tokenizer_kl_direction: str = "forward"
+    # [EasyOPD:simple] End
+
     # Store global batch info for loss aggregation:
     # dp_size: data parallel size
     # batch_num_tokens: number of valid tokens in global batch
@@ -157,7 +165,25 @@ class DistillationTeacherModelConfig(BaseConfig):
         if self.num_replicas is None:
             raise ValueError("num_replicas must be specified for distillation teacher model config.")
 
-    def validate_and_prepare_for_distillation(self, use_topk: bool, topk: Optional[int]) -> None:
+    # [EasyOPD:simple]
+    def validate_and_prepare_for_distillation(
+        self,
+        use_topk: bool,
+        topk: Optional[int],
+        use_cross_tokenizer: bool = False,
+    ) -> None:
+        """Validate inference config and prepare teacher rollout shape for distillation.
+
+        For the standard verl path (top-k or single-sample KL estimator) the teacher
+        runs vllm/sglang with `prompt_length += response_length` and `response_length = 1`,
+        which corresponds to a single forward returning logprobs.
+
+        For the EasyOPD `simple` cross-tokenizer path (`use_cross_tokenizer=True`),
+        the teacher runs an independent HuggingFace forward outside of vllm/sglang.
+        We therefore skip both the top-k engine validation and the rollout-shape
+        rewrite so the teacher inference config is left untouched.
+        """
+        # [EasyOPD:simple] End
         # Prompt + Response from student are fed into teacher as context
         max_model_len = self.inference.max_model_len
         student_prompt_length = self.inference.prompt_length
@@ -169,6 +195,12 @@ class DistillationTeacherModelConfig(BaseConfig):
                 f"response, and one generated token, but got {student_prompt_length=}, "
                 f"{student_response_length=}, {required_context_len=}, {max_model_len=}."
             )
+        # [EasyOPD:simple]
+        if use_cross_tokenizer:
+            # Cross-tokenizer mode: teacher runs HF forward externally; do not
+            # rewrite the rollout shape and do not validate top-k engine knobs.
+            return
+        # [EasyOPD:simple] End
         self.inference.prompt_length = self.inference.prompt_length + self.inference.response_length
         self.inference.response_length = 1
         self._validate_topk_logprobs(use_topk=use_topk, topk=topk)
@@ -264,6 +296,11 @@ class DistillationConfig(BaseConfig):
             teacher_model.validate_and_prepare_for_distillation(
                 use_topk=self.distillation_loss.loss_settings.use_topk,
                 topk=self.distillation_loss.topk,
+                # [EasyOPD:simple]
+                use_cross_tokenizer=getattr(
+                    self.distillation_loss.loss_settings, "use_cross_tokenizer", False
+                ),
+                # [EasyOPD:simple] End
             )
             teacher_world_size_sum += teacher_model.world_size
         total_pool_size = self.n_gpus_per_node * self.nnodes
