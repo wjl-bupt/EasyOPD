@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# EasyOPD `simple` — cross-tokenizer on-policy distillation launch script.
+# EasyOPD `simct` — span-based cross-tokenizer distillation launch script.
 #
 # Mirrors the KDFlow reference run
-#   scripts/ctopd_phi4/qwen25_phi4_simple_mix10k_lr5e-7.sh
+#   scripts/ctopd_phi4/qwen25_phi4_simct_mix10k_lr5e-7.sh
 # (Teacher: Qwen2.5-7B-Instruct  ->  Student: phi-4-mini SFT warmup,
-#  Algorithm: SimpleCrossTokenizerKD, Mixed Math+Code 10K, lr=5e-7)
+#  Algorithm: SimCT / legacy span_ctkd, Mixed Math+Code 10K, lr=5e-7)
 # but routes through verl's standard `verl.trainer.main_ppo` entry point with
-# `distillation.distillation_loss.loss_mode=simple` so the EasyOPD-side
-# loss (registered via `easyopd.methods.simple.losses.register_simple_loss`)
+# `distillation.distillation_loss.loss_mode=simct` so the EasyOPD-side
+# loss (registered via `easyopd.methods.simct.losses.register_simct_loss`)
 # is dispatched.
 
 set -xeuo pipefail
@@ -25,7 +25,7 @@ LOCAL_DATA_DIR=${LOCAL_DATA_DIR:-$HOME/data/mixed_math_code_10k}
 
 # ---- sync student checkpoint to local SSD (KDFlow parity) ----
 if [ ! -d "${LOCAL_STUDENT_DIR}/checkpoint-40" ]; then
-    echo "[run_simple] syncing student checkpoint to local SSD..."
+    echo "[run_simct] syncing student checkpoint to local SSD..."
     mkdir -p "${LOCAL_STUDENT_DIR}"
     rsync -ah --info=progress2 \
         "${REMOTE_STUDENT_DIR}/checkpoint-40/" \
@@ -34,7 +34,7 @@ fi
 
 # ---- sync teacher model to local SSD ----
 if [ ! -f "${LOCAL_TEACHER_DIR}/config.json" ]; then
-    echo "[run_simple] syncing teacher model to local SSD..."
+    echo "[run_simct] syncing teacher model to local SSD..."
     mkdir -p "$(dirname "${LOCAL_TEACHER_DIR}")"
     rsync -ah --info=progress2 \
         "${REMOTE_TEACHER_DIR}/" \
@@ -43,7 +43,7 @@ fi
 
 # ---- prepare verl-style parquet dataset ----
 if [ ! -f "${LOCAL_DATA_DIR}/train.parquet" ]; then
-    echo "[run_simple] converting ${REMOTE_DATASET_DIR} -> parquet..."
+    echo "[run_simct] converting ${REMOTE_DATASET_DIR} -> parquet..."
     python3 "${SCRIPT_DIR}/prepare_data.py" \
         --src "${REMOTE_DATASET_DIR}" \
         --dst "${LOCAL_DATA_DIR}"
@@ -64,10 +64,10 @@ TEACHER_VISIBLE_DEVICES=${TEACHER_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
 SIMPLE_TEACHER_SHARE_STUDENT_POOL=${SIMPLE_TEACHER_SHARE_STUDENT_POOL:-False}
 SIMPLE_TEACHER_NUM_GPUS_PER_ACTOR=${SIMPLE_TEACHER_NUM_GPUS_PER_ACTOR:-null}
 
-# `simple` is a cross-tokenizer KD mode. We bypass top-k / response_length=1
+# `simct` is KDFlow's legacy `span_ctkd` span-level cross-tokenizer KD mode. We bypass top-k / response_length=1
 # rewrites in the teacher rollout config (handled by verl, gated on
 # DistillationLossSettings.use_cross_tokenizer).
-distillation_loss_mode=${DISTILLATION_LOSS_MODE:-simple}
+distillation_loss_mode=${DISTILLATION_LOSS_MODE:-simct}
 use_policy_gradient=${USE_POLICY_GRADIENT:-False}
 # KDFlow uses --kd_loss_fn rkl => reverse KL.
 kl_direction=${KL_DIRECTION:-reverse}
@@ -100,7 +100,7 @@ teacher_tp=${TEACHER_TP:-1}
 teacher_gpu_mem_util=${TEACHER_GPU_MEM_UTIL:-0.6}
 rollout_temperature=${ROLLOUT_TEMPERATURE:-0.6}
 
-# The simple KD objective does not use task rewards, but verl's PPO/GRPO loop
+# The simct KD objective does not use task rewards, but verl's PPO/GRPO loop
 # still requires a scalar rollout reward. Use a neutral placeholder by default.
 reward_fn_path=${REWARD_FN_PATH:-${SCRIPT_DIR}/reward.py}
 
@@ -109,8 +109,8 @@ total_epochs=${TOTAL_EPOCHS:-1}
 save_freq=${SAVE_FREQ:-20}
 test_freq=${TEST_FREQ:-50}
 
-project_name=${PROJECT_NAME:-easyopd_simple_xtok}
-experiment_name=${EXPERIMENT_NAME:-qwen25_phi4_simple_mix10k_lr5e-7}
+project_name=${PROJECT_NAME:-easyopd_simct_xtok}
+experiment_name=${EXPERIMENT_NAME:-qwen25_phi4_simct_mix10k_lr5e-7}
 # ---- end user-adjustable ----
 
 train_files=${TRAIN_FILES:-"['${LOCAL_DATA_DIR}/train.parquet']"}
@@ -176,7 +176,7 @@ TRAINER=(
     trainer.total_epochs=${total_epochs}
 )
 
-# Note: `simple` runs the teacher as an independent HF forward worker.
+# Note: `simct` reuses the `simple` teacher sidecar as an independent HF/SGLang worker.
 # We still declare `teacher_models.teacher_model.model_path` so the
 # DistillationConfig accepts the YAML, but the inference engine name is
 # bypassed for cross-tokenizer mode (validate_and_prepare_for_distillation

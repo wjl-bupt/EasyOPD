@@ -169,6 +169,7 @@ class TeacherRayActor:
     def compute_hidden_states(
         self,
         prompts_ref: Any,
+        input_ids_ref: Any,
         loss_masks_ref: Any,
         batch_indices: List[int],
     ) -> List[Tuple[int, np.ndarray]]:
@@ -177,6 +178,9 @@ class TeacherRayActor:
         Args:
             prompts_ref: ray.ObjectRef OR an in-memory list of full
                 prompt+response strings (one per sample in the *full* batch).
+            input_ids_ref: ray.ObjectRef OR an in-memory list of pre-tokenized
+                teacher input ids. If not None, these ids are sent directly to
+                SGLang and prompts are only kept as a fallback/debug payload.
             loss_masks_ref: ray.ObjectRef OR list of np.bool_ arrays, one
                 per sample in the full batch. Each mask has shape
                 `[teacher_seq_len_i]` and selects the tokens whose hidden
@@ -198,6 +202,11 @@ class TeacherRayActor:
         prompts_full = (
             ray.get(prompts_ref) if isinstance(prompts_ref, ray.ObjectRef) else prompts_ref
         )
+        input_ids_full = (
+            ray.get(input_ids_ref)
+            if isinstance(input_ids_ref, ray.ObjectRef)
+            else input_ids_ref
+        )
         loss_masks_full = (
             ray.get(loss_masks_ref)
             if isinstance(loss_masks_ref, ray.ObjectRef)
@@ -209,13 +218,19 @@ class TeacherRayActor:
 
         # Pull the assigned slice of the global batch.
         prompts = [prompts_full[i] for i in batch_indices]
+        input_ids = (
+            [list(input_ids_full[i]) for i in batch_indices]
+            if input_ids_full is not None
+            else None
+        )
         loss_masks = [
             np.asarray(loss_masks_full[i]).astype(bool) for i in batch_indices
         ]
 
         # Prefill-only forward: max_new_tokens=0.
         hidden_states_list = self.engine_service.generate(
-            prompt=prompts,
+            prompt=None if input_ids is not None else prompts,
+            input_ids=input_ids,
             loss_masks=loss_masks,
             sampling_params={"max_new_tokens": 0},
             return_hidden_states=True,

@@ -75,13 +75,14 @@ class DistillationLossConfig(BaseConfig):
     clip_ratio_low: float = 0.2
     clip_ratio_high: float = 0.2
 
-    # [EasyOPD:simple]
-    # Cross-tokenizer KL direction for the EasyOPD `simple` loss. Ignored
-    # for all other loss_modes. Allowed values: "forward" (KL(student || teacher))
-    # or "reverse" (KL(teacher || student)). Default matches KDFlow's
-    # forward-KL convention.
+    # [EasyOPD:simple/simct]
+    # Cross-tokenizer KL direction for EasyOPD cross-tokenizer losses.
+    # Allowed values: "forward" (KL(student || teacher)) or "reverse"
+    # (KL(teacher || student)). `simple` keeps the historical forward default;
+    # `simct` examples override this to reverse to match KDFlow span_ctkd's
+    # on-policy RKL recipe.
     cross_tokenizer_kl_direction: str = "forward"
-    # [EasyOPD:simple] End
+    # [EasyOPD:simple/simct] End
 
     # Store global batch info for loss aggregation:
     # dp_size: data parallel size
@@ -112,6 +113,29 @@ class DistillationLossConfig(BaseConfig):
                 " token's logprob ∇logπ(a), so the top-k distributional signal (how non-sampled logits "
                 "should move) is largely unused."
             )
+
+        # [EasyOPD:simct]
+        if self.loss_mode in {"simple", "simct", "span_ctkd"}:
+            if self.cross_tokenizer_kl_direction not in {"forward", "reverse"}:
+                raise ValueError(
+                    "cross_tokenizer_kl_direction must be either 'forward' or 'reverse' "
+                    f"for EasyOPD cross-tokenizer loss_mode={self.loss_mode!r}, "
+                    f"got {self.cross_tokenizer_kl_direction!r}."
+                )
+        if self.loss_mode == "span_ctkd":
+            print("WARNING: loss_mode='span_ctkd' is a legacy alias; please migrate to loss_mode='simct'.")
+        if self.loss_mode in {"simct", "span_ctkd"} and self.cross_tokenizer_kl_direction != "reverse":
+            print(
+                "WARNING: EasyOPD simct ports KDFlow span_ctkd, whose on-policy recipe uses "
+                "reverse KL. Current cross_tokenizer_kl_direction="
+                f"{self.cross_tokenizer_kl_direction!r}."
+            )
+        if self.loss_mode in {"simct", "span_ctkd"} and self.use_policy_gradient:
+            print(
+                "WARNING: EasyOPD simct is implemented as a supervised span-level KD loss; "
+                "set distillation.distillation_loss.use_policy_gradient=False for KDFlow-style training."
+            )
+        # [EasyOPD:simct] End
 
         if not self.use_policy_gradient and self.loss_mode == "k1":
             raise ValueError(
@@ -277,11 +301,25 @@ class DistillationConfig(BaseConfig):
     ```
     """
 
-    _mutable_fields = BaseConfig._mutable_fields | {"teacher_models", "n_gpus_per_node", "nnodes"}
+    _mutable_fields = BaseConfig._mutable_fields | {
+        "teacher_models",
+        "n_gpus_per_node",
+        "nnodes",
+        "simple_teacher_gpu_ids",
+        "simple_teacher_visible_devices",
+        "simple_teacher_num_gpus_per_actor",
+        "simple_teacher_share_student_pool",
+    }
 
     enabled: bool = False
     n_gpus_per_node: int = 0
     nnodes: int = 0
+    # EasyOPD `simple` sidecar layout knobs. They are ignored by standard verl
+    # distillation modes.
+    simple_teacher_gpu_ids: Optional[list[int]] = None
+    simple_teacher_visible_devices: Optional[list[int]] = None
+    simple_teacher_num_gpus_per_actor: Optional[float] = None
+    simple_teacher_share_student_pool: bool = False
     teacher_models: dict[str, DistillationTeacherModelConfig] = field(default_factory=dict)
     teacher_key: str = "data_source"
     distillation_loss: DistillationLossConfig = field(default_factory=DistillationLossConfig)

@@ -1,0 +1,130 @@
+# Copyright 2026 EasyOPD Contributors
+#
+# Unit tests for `easyopd.methods.simct.losses`.
+#
+# These tests use lightweight tokenizer stubs and synthetic logits so they do
+# not require model downloads, GPUs, SGLang, or Ray.
+
+import os
+import sys
+
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+)
+
+import torch
+
+from easyopd.methods.simct.losses import (
+    EOS_MARKER,
+    align_label_ids_with_spans,
+    build_virtual_vocab_logits,
+    decode_token_texts,
+    register_simct_loss,
+)
+from verl.trainer.distillation.losses import (
+    DISTILLATION_LOSS_REGISTRY,
+    DISTILLATION_SETTINGS_REGISTRY,
+)
+
+
+class _DecodeTokenizer:
+    def __init__(self, pieces, eos_token_id=99):
+        self.pieces = dict(pieces)
+        self.eos_token_id = eos_token_id
+        self.eos_token = "<eos>"
+        self.all_special_ids = [eos_token_id, 1000]
+
+    def decode(self, ids, skip_special_tokens=False):
+        assert len(ids) == 1
+        return self.pieces[int(ids[0])]
+
+
+def test_decode_token_texts_uses_decode_and_preserves_newline():
+    tokenizer = _DecodeTokenizer({1: "hello", 2: "\n", 3: " world"})
+    assert decode_token_texts([1, 2, 3], tokenizer) == ["hello", "\n", " world"]
+    assert decode_token_texts([99], tokenizer) == [EOS_MARKER]
+    assert decode_token_texts([1000], tokenizer) == [""]
+
+
+def test_align_label_ids_with_spans_identifies_cross_tokenizer_span():
+    teacher = _DecodeTokenizer({10: "ab", 11: "c"})
+    student = _DecodeTokenizer({20: "a", 21: "bc"})
+
+    segments, teacher_ids, student_ids = align_label_ids_with_spans(
+        teacher_label_ids=[10, 11],
+        student_label_ids=[20, 21],
+        teacher_tokenizer=teacher,
+        student_tokenizer=student,
+    )
+
+    assert teacher_ids == [10, 11]
+    assert student_ids == [20, 21]
+    assert segments == [(0, 2, 0, 2)]
+
+
+def test_align_label_ids_with_spans_handles_one_to_one_and_span_mix():
+    teacher = _DecodeTokenizer({10: "x", 11: "ab", 12: "c"})
+    student = _DecodeTokenizer({20: "x", 21: "a", 22: "bc"})
+
+    segments, _, _ = align_label_ids_with_spans(
+        teacher_label_ids=[10, 11, 12],
+        student_label_ids=[20, 21, 22],
+        teacher_tokenizer=teacher,
+        student_tokenizer=student,
+    )
+
+    assert segments == [(0, 1, 0, 1), (1, 3, 1, 3)]
+
+
+def test_align_label_ids_with_spans_unalignable_returns_empty():
+    teacher = _DecodeTokenizer({10: "abc"})
+    student = _DecodeTokenizer({20: "xyz"})
+
+    segments, _, _ = align_label_ids_with_spans(
+        teacher_label_ids=[10],
+        student_label_ids=[20],
+        teacher_tokenizer=teacher,
+        student_tokenizer=student,
+    )
+
+    assert segments == []
+
+
+def test_build_virtual_vocab_logits_adds_span_dimension():
+    segments = [(0, 2, 0, 2)]
+    student_logits = torch.zeros(2, 8)
+    teacher_logits = torch.zeros(2, 9)
+    student_logits[0, 1] = 1.0
+    student_logits[0, 2] = 2.0
+    student_logits[0, 4] = 4.0
+    student_logits[1, 5] = 6.0
+    teacher_logits[0, 3] = 3.0
+    teacher_logits[0, 4] = 5.0
+    teacher_logits[0, 6] = 8.0
+    teacher_logits[1, 7] = 10.0
+
+    student_virtual, teacher_virtual, is_span = build_virtual_vocab_logits(
+        segments=segments,
+        student_logits_aligned=student_logits,
+        teacher_logits_aligned=teacher_logits,
+        student_label_ids=[4, 5],
+        teacher_label_ids=[6, 7],
+        student_overlap_ids=torch.tensor([1, 2], dtype=torch.long),
+        teacher_overlap_ids=torch.tensor([3, 4], dtype=torch.long),
+    )
+
+    assert student_virtual.shape == teacher_virtual.shape == (1, 3)
+    assert is_span == [True]
+    assert torch.allclose(student_virtual[0, :2], torch.tensor([1.0, 2.0]))
+    assert torch.allclose(teacher_virtual[0, :2], torch.tensor([3.0, 5.0]))
+    assert torch.allclose(student_virtual[0, 2], torch.tensor(5.0))
+    assert torch.allclose(teacher_virtual[0, 2], torch.tensor(9.0))
+
+
+def test_register_simct_loss_registers_new_and_legacy_names():
+    register_simct_loss()
+    assert "simct" in DISTILLATION_LOSS_REGISTRY
+    assert "span_ctkd" in DISTILLATION_LOSS_REGISTRY
+    assert DISTILLATION_LOSS_REGISTRY["simct"] is DISTILLATION_LOSS_REGISTRY["span_ctkd"]
+    assert DISTILLATION_SETTINGS_REGISTRY["simct"].use_cross_tokenizer is True
+    assert DISTILLATION_SETTINGS_REGISTRY["span_ctkd"].use_cross_tokenizer is True

@@ -406,7 +406,9 @@ class AgentLoopWorker:
         # LLMServerClient). We bypass verl's vllm/sglang teacher manager
         # entirely and instead batch-call the sidecar from `_postprocess`.
         self._easyopd_simple_sidecar = None
+        self._easyopd_loss_mode = None
         if self.distillation_enabled:
+            self._easyopd_loss_mode = config.distillation.distillation_loss.loss_mode
             try:
                 from easyopd.methods.simple.teacher_sidecar import (
                     EasyOPDSimpleTeacherSidecar,
@@ -1060,11 +1062,15 @@ class AgentLoopWorker:
         """
         sidecar = self._easyopd_simple_sidecar
         assert sidecar is not None
+        loss_mode = self._easyopd_loss_mode or "simple"
+        mask_mode = "label" if loss_mode in {"simct", "span_ctkd"} else "response"
 
         full_texts: list[str] = []
         teacher_loss_masks: list[np.ndarray] = []
         teacher_input_ids_list: list[np.ndarray] = []
         student_response_texts: list[str] = []
+        student_input_ids_list: list[np.ndarray] = []
+        student_loss_masks: list[np.ndarray] = []
 
         for inp in inputs:
             # `prompt_ids`/`response_ids` are [1, L] tensors after agent loop
@@ -1075,6 +1081,7 @@ class AgentLoopWorker:
             pad_id = self.tokenizer.pad_token_id
             prompt_ids_clean = [i for i in prompt_ids_1d if i != pad_id]
             response_ids_clean = [i for i in response_ids_1d if i != pad_id]
+            student_ids_clean = prompt_ids_clean + response_ids_clean
 
             prompt_text = self.tokenizer.decode(
                 prompt_ids_clean, skip_special_tokens=False
@@ -1085,15 +1092,36 @@ class AgentLoopWorker:
             tea_ids, tea_mask, full_text = sidecar.encode_for_teacher(
                 prompt_text=prompt_text,
                 response_text=response_text,
+                mask_mode=mask_mode,
             )
             full_texts.append(full_text)
             teacher_loss_masks.append(tea_mask)
             teacher_input_ids_list.append(np.asarray(tea_ids, dtype=np.int64))
             student_response_texts.append(response_text)
+            student_input_ids_list.append(np.asarray(student_ids_clean, dtype=np.int64))
+
+            stu_mask = np.zeros(len(student_ids_clean), dtype=bool)
+            if loss_mode in {"simct", "span_ctkd"} and len(student_ids_clean) > 1:
+                boundary = len(prompt_ids_clean)
+                start = max(boundary - 1, 0)
+                stu_mask[start : len(student_ids_clean) - 1] = True
+            student_loss_masks.append(stu_mask)
 
         hidden_states_list = sidecar.compute_hidden_states_batch(
-            prompts=full_texts, loss_masks=teacher_loss_masks
+            prompts=full_texts,
+            loss_masks=teacher_loss_masks,
+            input_ids=[ids.tolist() for ids in teacher_input_ids_list],
+            method_name=loss_mode,
         )
+        if loss_mode in {"simct", "span_ctkd"} and os.getenv("EASYOPD_SIMCT_DEBUG", "0").lower() in {"1", "true", "yes", "on"}:
+            mask_counts = [int(np.asarray(mask).astype(bool).sum()) for mask in teacher_loss_masks]
+            hidden_counts = [int(getattr(hs, "shape", [0])[0]) for hs in hidden_states_list]
+            logger.info(
+                "[EasyOPD:simct debug] teacher batch=%d mask_tokens=%s hidden_tokens=%s",
+                len(inputs),
+                mask_counts,
+                hidden_counts,
+            )
 
         n = len(inputs)
         hs_arr = np.empty(n, dtype=object)
@@ -1104,12 +1132,19 @@ class AgentLoopWorker:
         mask_arr[:] = teacher_loss_masks
         resp_text_arr = np.empty(n, dtype=object)
         resp_text_arr[:] = student_response_texts
+        stu_ids_arr = np.empty(n, dtype=object)
+        stu_ids_arr[:] = student_input_ids_list
+        stu_mask_arr = np.empty(n, dtype=object)
+        stu_mask_arr[:] = student_loss_masks
 
         return {
             "teacher_hidden_states": hs_arr,
             "teacher_input_ids": ids_arr,
             "teacher_loss_mask": mask_arr,
             "student_response_text": resp_text_arr,
+            "student_input_ids_unpadded": stu_ids_arr,
+            "student_loss_mask_unpadded": stu_mask_arr,
+            "easyopd_loss_mode": np.array([loss_mode] * n, dtype=object),
         }
     # [EasyOPD:simple] End
 

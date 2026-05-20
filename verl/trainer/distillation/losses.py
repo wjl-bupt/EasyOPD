@@ -218,22 +218,40 @@ def distillation_ppo_loss(
 
     # Called as logits processor
     if student_logits is not None:
-        # [EasyOPD:simple] route cross-tokenizer losses to the EasyOPD path.
+        # [EasyOPD:simple/simct] route cross-tokenizer losses to the EasyOPD path.
         loss_settings = distillation_config.distillation_loss.loss_settings
         if getattr(loss_settings, "use_cross_tokenizer", False):
-            from easyopd.methods.simple.losses import (
-                compute_simple_xtok_logits_processor,
-            )
+            loss_mode = distillation_config.distillation_loss.loss_mode
+            if loss_mode in {"simct", "span_ctkd"}:
+                from easyopd.methods.simct.losses import (
+                    compute_simct_xtok_logits_processor,
+                )
 
-            distillation_losses = compute_simple_xtok_logits_processor(
-                student_logits=student_logits,
-                data=data,
-                cu_seqlens=cu_seqlens,
-                config=config,
-                distillation_config=distillation_config,
+                return compute_simct_xtok_logits_processor(
+                    student_logits=student_logits,
+                    data=data,
+                    cu_seqlens=cu_seqlens,
+                    config=config,
+                    distillation_config=distillation_config,
+                )
+            if loss_mode == "simple":
+                from easyopd.methods.simple.losses import (
+                    compute_simple_xtok_logits_processor,
+                )
+
+                distillation_losses = compute_simple_xtok_logits_processor(
+                    student_logits=student_logits,
+                    data=data,
+                    cu_seqlens=cu_seqlens,
+                    config=config,
+                    distillation_config=distillation_config,
+                )
+                return {"distillation_losses": distillation_losses}
+            raise ValueError(
+                f"Unsupported EasyOPD cross-tokenizer loss mode: {loss_mode!r}. "
+                "Supported modes are: ['simple', 'simct', 'span_ctkd']."
             )
-            return {"distillation_losses": distillation_losses}
-        # [EasyOPD:simple] End
+        # [EasyOPD:simple/simct] End
         return compute_topk_loss(config, distillation_config, data, student_logits, data_format)
 
     # Called as final policy loss
@@ -402,13 +420,13 @@ def compute_distillation_loss_reverse_kl_estimator(
     return distillation_losses, metrics
 
 
-# [EasyOPD:simple]
-# Register the EasyOPD `simple` cross-tokenizer KD loss. The actual loss
-# implementation lives in `easyopd/methods/simple/losses.py`; we only
-# trigger registration here so that `loss_mode=simple` resolves correctly
-# via `get_distillation_loss_fn`. The import is wrapped in try/except so
-# that environments without EasyOPD (e.g. pure verl checkouts) keep
-# working — `loss_mode=simple` will simply be unavailable.
+# [EasyOPD:simple/simct]
+# Register EasyOPD cross-tokenizer KD losses. The actual implementations live
+# under `easyopd/methods/*/losses.py`; we only trigger registration here so
+# that `loss_mode=simple`, `loss_mode=simct`, and the legacy
+# `loss_mode=span_ctkd` resolve correctly via `get_distillation_loss_fn`.
+# The imports are wrapped in try/except so environments without EasyOPD keep
+# working — these loss modes will simply be unavailable.
 try:
     from easyopd.methods.simple.losses import register_simple_loss as _register_simple_loss
 
@@ -419,4 +437,15 @@ except Exception as _easyopd_simple_err:  # pragma: no cover - defensive
     _logging.getLogger(__name__).debug(
         "EasyOPD `simple` distillation loss not registered: %s", _easyopd_simple_err
     )
-# [EasyOPD:simple] End
+
+try:
+    from easyopd.methods.simct.losses import register_simct_loss as _register_simct_loss
+
+    _register_simct_loss()
+except Exception as _easyopd_simct_err:  # pragma: no cover - defensive
+    import logging as _logging
+
+    _logging.getLogger(__name__).debug(
+        "EasyOPD `simct` distillation loss not registered: %s", _easyopd_simct_err
+    )
+# [EasyOPD:simple/simct] End

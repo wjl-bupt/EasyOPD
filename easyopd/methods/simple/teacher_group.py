@@ -87,6 +87,8 @@ class TeacherActorGroup:
         pg: Optional[PlacementGroup] = None,
         reordered_bundle_indices: Optional[Sequence[int]] = None,
         reordered_gpu_ids: Optional[Sequence[int]] = None,
+        base_gpu_ids: Optional[Sequence[int]] = None,
+        teacher_visible_devices: Optional[Sequence[int]] = None,
     ) -> None:
         """
         Args:
@@ -107,6 +109,12 @@ class TeacherActorGroup:
                 dp_size * tp_size * pp_size). Required when `pg` is given.
             reordered_gpu_ids: physical GPU id per bundle (same length).
                 Used to compute `base_gpu_id`.
+            base_gpu_ids: explicit physical GPU id per teacher engine.
+                Takes precedence over `reordered_gpu_ids` and round-robin
+                fallback. Use this for colocated layouts such as 8S+8T.
+            teacher_visible_devices: optional CUDA_VISIBLE_DEVICES list for
+                teacher actors. Use this to let teacher actors see physical
+                GPUs that the top-level student process masks out.
         """
         logger.info(
             "[TeacherActorGroup] init dp_size=%d tp_size=%d pp_size=%d "
@@ -130,6 +138,18 @@ class TeacherActorGroup:
         self._reordered_gpu_ids = (
             list(reordered_gpu_ids) if reordered_gpu_ids is not None else None
         )
+        self._base_gpu_ids = list(base_gpu_ids) if base_gpu_ids is not None else None
+        if self._base_gpu_ids is not None:
+            if len(self._base_gpu_ids) != self.dp_size:
+                raise ValueError(
+                    "base_gpu_ids length must equal dp_size: "
+                    f"{len(self._base_gpu_ids)} != {self.dp_size}"
+                )
+        self._teacher_visible_devices = (
+            [int(gpu_id) for gpu_id in teacher_visible_devices]
+            if teacher_visible_devices is not None
+            else None
+        )
 
         self.teacher_engines: List[ray.actor.ActorHandle] = []
         # Worker actors are auxiliary actors spawned only when a single
@@ -147,6 +167,10 @@ class TeacherActorGroup:
 
     def _create_actors(self) -> None:
         env_vars = {name: "1" for name in _NOSET_VISIBLE_DEVICES_ENV_VARS}
+        if self._teacher_visible_devices is not None:
+            env_vars["CUDA_VISIBLE_DEVICES"] = ",".join(
+                str(gpu_id) for gpu_id in self._teacher_visible_devices
+            )
         num_gpu_per_engine = self.tp_size * self.pp_size
         nnodes_per_engine = max(num_gpu_per_engine // self.num_gpus_per_node, 1)
 
@@ -162,7 +186,9 @@ class TeacherActorGroup:
         num_gpu_per_engine: int,
         env_vars: dict,
     ) -> None:
-        if self._reordered_gpu_ids is not None:
+        if self._base_gpu_ids is not None:
+            base_gpu_id = int(self._base_gpu_ids[engine_idx])
+        elif self._reordered_gpu_ids is not None:
             base_gpu_id = int(self._reordered_gpu_ids[engine_idx * num_gpu_per_engine])
         else:
             base_gpu_id = (engine_idx * num_gpu_per_engine) % self.num_gpus_per_node
@@ -282,13 +308,18 @@ class TeacherActorGroup:
         self,
         prompts: List[str],
         loss_masks: List[np.ndarray],
+        input_ids: Optional[List[List[int]]] = None,
         wait_timeout_s: float = 600.0,
+        method_name: str = "simple",
     ) -> List[np.ndarray]:
         """Run prefill on a full batch by sharding samples across actors.
 
         Args:
             prompts: list of B teacher-side prompt+response strings (text,
                 already concatenated).
+            input_ids: optional list of B pre-tokenized teacher input id
+                sequences. If provided, SGLang receives these directly and
+                `prompts` is only used as a fallback/debug payload.
             loss_masks: list of B numpy boolean masks. Mask `i` has shape
                 `[teacher_seq_len_i]` and selects the tokens whose hidden
                 states the loss will consume (typically the response
@@ -304,8 +335,15 @@ class TeacherActorGroup:
                 f"prompts ({len(prompts)}) and loss_masks ({len(loss_masks)}) "
                 f"length mismatch."
             )
+        if input_ids is not None and len(input_ids) != len(loss_masks):
+            raise ValueError(
+                f"input_ids ({len(input_ids)}) and loss_masks ({len(loss_masks)}) "
+                f"length mismatch."
+            )
         if not prompts:
             return []
+
+        input_lengths = [len(ids) for ids in input_ids] if input_ids is not None else [len(p) for p in prompts]
 
         # Token-balanced greedy assignment: always send the next sample to
         # the actor that currently has the fewest tokens scheduled.
@@ -319,12 +357,15 @@ class TeacherActorGroup:
 
         # ray.put once so we don't re-serialize the prompts/masks per actor.
         prompts_ref = ray.put(prompts)
+        input_ids_ref = ray.put(input_ids) if input_ids is not None else None
         masks_ref = ray.put(loss_masks)
 
         futures: List[ray.ObjectRef] = []
         for actor, batch_indices in zip(self.teacher_engines, actor_assignments):
             futures.append(
-                actor.compute_hidden_states.remote(prompts_ref, masks_ref, batch_indices)
+                actor.compute_hidden_states.remote(
+                    prompts_ref, input_ids_ref, masks_ref, batch_indices
+                )
             )
 
         # ray.wait loop with periodic timeout warnings (KDFlow parity).
@@ -338,8 +379,10 @@ class TeacherActorGroup:
             if elapsed > wait_timeout_s:
                 pending_actor_idx = [future_to_idx[f] for f in pending]
                 raise RuntimeError(
-                    f"[TeacherActorGroup] timed out after {elapsed:.1f}s "
-                    f"waiting on actors {pending_actor_idx}"
+                    f"[TeacherActorGroup:{method_name}] timed out after {elapsed:.1f}s "
+                    f"waiting on actors {pending_actor_idx}; batch_size={len(prompts)}, "
+                    f"input_len_min={min(input_lengths) if input_lengths else 0}, "
+                    f"input_len_max={max(input_lengths) if input_lengths else 0}"
                 )
             if not ready:
                 pending_actor_idx = [future_to_idx[f] for f in pending]
@@ -351,7 +394,18 @@ class TeacherActorGroup:
                 )
                 continue
             for ref in ready:
-                raw_results[future_to_idx[ref]] = ray.get(ref)
+                actor_idx = future_to_idx[ref]
+                try:
+                    raw_results[actor_idx] = ray.get(ref)
+                except Exception as exc:
+                    sample_indices = actor_assignments[actor_idx]
+                    sample_lengths = [input_lengths[i] for i in sample_indices]
+                    raise RuntimeError(
+                        f"[TeacherActorGroup:{method_name}] actor {actor_idx} failed while "
+                        f"computing hidden states; sample_indices={sample_indices}, "
+                        f"input_len_min={min(sample_lengths) if sample_lengths else 0}, "
+                        f"input_len_max={max(sample_lengths) if sample_lengths else 0}"
+                    ) from exc
 
         # Flatten and re-sort to original order.
         flat: List[Tuple[int, np.ndarray]] = list(

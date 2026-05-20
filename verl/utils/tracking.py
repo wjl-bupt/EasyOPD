@@ -19,6 +19,7 @@ import dataclasses
 import json
 import logging
 import os
+import sys
 from enum import Enum
 from functools import partial
 from pathlib import Path
@@ -67,6 +68,7 @@ class Tracking:
                 assert backend in self.supported_backend, f"{backend} is not supported"
 
         self.logger = {}
+        self._finished = False
 
         if "tracking" in default_backend or "wandb" in default_backend:
             import os
@@ -179,25 +181,49 @@ class Tracking:
             self.logger["file"] = FileLogger(project_name, experiment_name)
 
     def log(self, data, step, backend=None):
+        if self._finished:
+            return
         for default_backend, logger_instance in self.logger.items():
             if backend is None or default_backend in backend:
                 logger_instance.log(data=data, step=step)
 
+    def finish(self, exit_code: int = 0):
+        if getattr(self, "_finished", True):
+            return
+        self._finished = True
+        logger_instances = getattr(self, "logger", {})
+
+        finish_callbacks = {
+            "wandb": lambda logger_instance: logger_instance.finish(exit_code=exit_code),
+            "swanlab": lambda logger_instance: logger_instance.finish(),
+            "vemlp_wandb": lambda logger_instance: logger_instance.finish(exit_code=exit_code),
+            "tensorboard": lambda logger_instance: logger_instance.finish(),
+            "clearml": lambda logger_instance: logger_instance.finish(),
+            "trackio": lambda logger_instance: logger_instance.finish(),
+            "file": lambda logger_instance: logger_instance.finish(),
+        }
+
+        for backend, finish_callback in finish_callbacks.items():
+            logger_instance = logger_instances.get(backend)
+            if logger_instance is None:
+                continue
+            try:
+                finish_callback(logger_instance)
+            except Exception as exception:
+                if not sys.is_finalizing():
+                    try:
+                        logger.warning("Failed to finish %s logger: %s", backend, exception)
+                    except Exception:
+                        pass
+
     def __del__(self):
-        if "wandb" in self.logger:
-            self.logger["wandb"].finish(exit_code=0)
-        if "swanlab" in self.logger:
-            self.logger["swanlab"].finish()
-        if "vemlp_wandb" in self.logger:
-            self.logger["vemlp_wandb"].finish(exit_code=0)
-        if "tensorboard" in self.logger:
-            self.logger["tensorboard"].finish()
-        if "clearml" in self.logger:
-            self.logger["clearml"].finish()
-        if "trackio" in self.logger:
-            self.logger["trackio"].finish()
-        if "file" in self.logger:
-            self.logger["file"].finish()
+        try:
+            self.finish(exit_code=0)
+        except Exception:
+            # Never raise from object finalizers; dependencies such as logging,
+            # W&B's service process, or DataLoader workers may already be gone
+            # during interpreter shutdown.
+            pass
 
 
 class ClearMLLogger:

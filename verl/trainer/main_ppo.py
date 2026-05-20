@@ -178,8 +178,9 @@ class TaskRunner:
             if distillation_config.nnodes <= 0:
                 raise ValueError("config.distillation.nnodes must be greater than 0")
 
-            teacher_pool = [distillation_config.n_gpus_per_node] * distillation_config.nnodes
-            resource_pool_spec["teacher_pool"] = teacher_pool
+            if not bool(getattr(distillation_config, "simple_teacher_share_student_pool", False)):
+                teacher_pool = [distillation_config.n_gpus_per_node] * distillation_config.nnodes
+                resource_pool_spec["teacher_pool"] = teacher_pool
 
         from verl.trainer.ppo.ray_trainer import ResourcePoolManager
 
@@ -205,7 +206,11 @@ class TaskRunner:
         if is_distillation_enabled(config.get("distillation")):
             # we do not use teacher model workers, so we only register teacher model in resource pool
             # without registering a teacher model worker in role-worker mapping
-            self.mapping[Role.TeacherModel] = "teacher_pool"
+            distillation_config = config.get("distillation")
+            if bool(getattr(distillation_config, "simple_teacher_share_student_pool", False)):
+                self.mapping[Role.TeacherModel] = "global_pool"
+            else:
+                self.mapping[Role.TeacherModel] = "teacher_pool"
 
     def add_ref_policy_worker(self, config, ref_policy_cls):
         """Ref policy is fused into ActorRolloutRefWorker in the unified model engine.

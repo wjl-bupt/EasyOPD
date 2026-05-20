@@ -50,7 +50,7 @@ class _StubTeacherActor:
         return True
 
     def compute_hidden_states(
-        self, prompts_ref, masks_ref, batch_indices: List[int]
+        self, prompts_ref, input_ids_ref, masks_ref, batch_indices: List[int]
     ) -> List[Tuple[int, np.ndarray]]:
         self._calls.append(list(batch_indices))
         # Resolve refs (they may be ObjectRefs created by the group via ray.put).
