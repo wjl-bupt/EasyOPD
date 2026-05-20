@@ -1060,6 +1060,11 @@ class FSDPEngineWithLMHead(FSDPEngine):
             data=micro_batch, key="calculate_sum_pi_squared", default=False
         )
         distillation_use_topk = tu.get_non_tensor_data(data=micro_batch, key="distillation_use_topk", default=False)
+        # [EasyOPD:simple]
+        distillation_use_cross_tokenizer = tu.get_non_tensor_data(
+            data=micro_batch, key="distillation_use_cross_tokenizer", default=False
+        )
+        # [EasyOPD:simple] End
 
         if calculate_sum_pi_squared and use_fused_kernels:
             raise NotImplementedError(
@@ -1117,6 +1122,28 @@ class FSDPEngineWithLMHead(FSDPEngine):
                             pad_size = output_args["pad_size"]
                             v = gather_outputs_and_unpad(v, gather_dim=0, unpad_dim=0, padding_size=pad_size)
                         model_output[k] = torch.nested.nested_tensor_from_jagged(v, cu_seqlens)
+                # [EasyOPD:simple] cross-tokenizer KD path: feed cu_seqlens
+                # so the loss fn can slice per-sample response segments
+                # out of the rmpad student logits.
+                elif distillation_use_cross_tokenizer:
+                    cu_seqlens = input_ids.offsets()
+                    outputs = logits_processor_func(
+                        student_logits=logits_rmpad.unsqueeze(0),
+                        data=micro_batch,
+                        cu_seqlens=cu_seqlens,
+                    )
+                    for k, v in outputs.items():
+                        v = v.squeeze(0)
+                        assert v.shape == log_probs.shape, (
+                            f"log_probs shape: {log_probs.shape}, {k} shape: {v.shape}"
+                        )
+                        if self.use_ulysses_sp:
+                            pad_size = output_args["pad_size"]
+                            v = gather_outputs_and_unpad(
+                                v, gather_dim=0, unpad_dim=0, padding_size=pad_size
+                            )
+                        model_output[k] = torch.nested.nested_tensor_from_jagged(v, cu_seqlens)
+                # [EasyOPD:simple] End
 
             # gather log_prob if sp > 1
             if self.use_ulysses_sp:

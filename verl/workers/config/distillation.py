@@ -75,6 +75,15 @@ class DistillationLossConfig(BaseConfig):
     clip_ratio_low: float = 0.2
     clip_ratio_high: float = 0.2
 
+    # [EasyOPD:simple/simct]
+    # Cross-tokenizer KL direction for EasyOPD cross-tokenizer losses.
+    # Allowed values: "forward" (KL(student || teacher)) or "reverse"
+    # (KL(teacher || student)). `simple` keeps the historical forward default;
+    # `simct` examples override this to reverse to match KDFlow span_ctkd's
+    # on-policy RKL recipe.
+    cross_tokenizer_kl_direction: str = "forward"
+    # [EasyOPD:simple/simct] End
+
     # Store global batch info for loss aggregation:
     # dp_size: data parallel size
     # batch_num_tokens: number of valid tokens in global batch
@@ -104,6 +113,29 @@ class DistillationLossConfig(BaseConfig):
                 " token's logprob ∇logπ(a), so the top-k distributional signal (how non-sampled logits "
                 "should move) is largely unused."
             )
+
+        # [EasyOPD:simct]
+        if self.loss_mode in {"simple", "simct", "span_ctkd"}:
+            if self.cross_tokenizer_kl_direction not in {"forward", "reverse"}:
+                raise ValueError(
+                    "cross_tokenizer_kl_direction must be either 'forward' or 'reverse' "
+                    f"for EasyOPD cross-tokenizer loss_mode={self.loss_mode!r}, "
+                    f"got {self.cross_tokenizer_kl_direction!r}."
+                )
+        if self.loss_mode == "span_ctkd":
+            print("WARNING: loss_mode='span_ctkd' is a legacy alias; please migrate to loss_mode='simct'.")
+        if self.loss_mode in {"simct", "span_ctkd"} and self.cross_tokenizer_kl_direction != "reverse":
+            print(
+                "WARNING: EasyOPD simct ports KDFlow span_ctkd, whose on-policy recipe uses "
+                "reverse KL. Current cross_tokenizer_kl_direction="
+                f"{self.cross_tokenizer_kl_direction!r}."
+            )
+        if self.loss_mode in {"simct", "span_ctkd"} and self.use_policy_gradient:
+            print(
+                "WARNING: EasyOPD simct is implemented as a supervised span-level KD loss; "
+                "set distillation.distillation_loss.use_policy_gradient=False for KDFlow-style training."
+            )
+        # [EasyOPD:simct] End
 
         if not self.use_policy_gradient and self.loss_mode == "k1":
             raise ValueError(
@@ -157,7 +189,25 @@ class DistillationTeacherModelConfig(BaseConfig):
         if self.num_replicas is None:
             raise ValueError("num_replicas must be specified for distillation teacher model config.")
 
-    def validate_and_prepare_for_distillation(self, use_topk: bool, topk: Optional[int]) -> None:
+    # [EasyOPD:simple]
+    def validate_and_prepare_for_distillation(
+        self,
+        use_topk: bool,
+        topk: Optional[int],
+        use_cross_tokenizer: bool = False,
+    ) -> None:
+        """Validate inference config and prepare teacher rollout shape for distillation.
+
+        For the standard verl path (top-k or single-sample KL estimator) the teacher
+        runs vllm/sglang with `prompt_length += response_length` and `response_length = 1`,
+        which corresponds to a single forward returning logprobs.
+
+        For the EasyOPD `simple` cross-tokenizer path (`use_cross_tokenizer=True`),
+        the teacher runs an independent HuggingFace forward outside of vllm/sglang.
+        We therefore skip both the top-k engine validation and the rollout-shape
+        rewrite so the teacher inference config is left untouched.
+        """
+        # [EasyOPD:simple] End
         # Prompt + Response from student are fed into teacher as context
         max_model_len = self.inference.max_model_len
         student_prompt_length = self.inference.prompt_length
@@ -169,6 +219,12 @@ class DistillationTeacherModelConfig(BaseConfig):
                 f"response, and one generated token, but got {student_prompt_length=}, "
                 f"{student_response_length=}, {required_context_len=}, {max_model_len=}."
             )
+        # [EasyOPD:simple]
+        if use_cross_tokenizer:
+            # Cross-tokenizer mode: teacher runs HF forward externally; do not
+            # rewrite the rollout shape and do not validate top-k engine knobs.
+            return
+        # [EasyOPD:simple] End
         self.inference.prompt_length = self.inference.prompt_length + self.inference.response_length
         self.inference.response_length = 1
         self._validate_topk_logprobs(use_topk=use_topk, topk=topk)
@@ -245,11 +301,25 @@ class DistillationConfig(BaseConfig):
     ```
     """
 
-    _mutable_fields = BaseConfig._mutable_fields | {"teacher_models", "n_gpus_per_node", "nnodes"}
+    _mutable_fields = BaseConfig._mutable_fields | {
+        "teacher_models",
+        "n_gpus_per_node",
+        "nnodes",
+        "simple_teacher_gpu_ids",
+        "simple_teacher_visible_devices",
+        "simple_teacher_num_gpus_per_actor",
+        "simple_teacher_share_student_pool",
+    }
 
     enabled: bool = False
     n_gpus_per_node: int = 0
     nnodes: int = 0
+    # EasyOPD `simple` sidecar layout knobs. They are ignored by standard verl
+    # distillation modes.
+    simple_teacher_gpu_ids: Optional[list[int]] = None
+    simple_teacher_visible_devices: Optional[list[int]] = None
+    simple_teacher_num_gpus_per_actor: Optional[float] = None
+    simple_teacher_share_student_pool: bool = False
     teacher_models: dict[str, DistillationTeacherModelConfig] = field(default_factory=dict)
     teacher_key: str = "data_source"
     distillation_loss: DistillationLossConfig = field(default_factory=DistillationLossConfig)
@@ -264,6 +334,11 @@ class DistillationConfig(BaseConfig):
             teacher_model.validate_and_prepare_for_distillation(
                 use_topk=self.distillation_loss.loss_settings.use_topk,
                 topk=self.distillation_loss.topk,
+                # [EasyOPD:simple]
+                use_cross_tokenizer=getattr(
+                    self.distillation_loss.loss_settings, "use_cross_tokenizer", False
+                ),
+                # [EasyOPD:simple] End
             )
             teacher_world_size_sum += teacher_model.world_size
         total_pool_size = self.n_gpus_per_node * self.nnodes

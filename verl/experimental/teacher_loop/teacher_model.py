@@ -175,7 +175,39 @@ class MultiTeacherModelManager:
         self.server_handles: dict[str, list] = {}
         self.load_balancer_handle: dict[str, object] = {}
 
+        # [EasyOPD:simple]
+        # Cross-tokenizer mode: skip verl's vllm/sglang teacher manager and
+        # spin up an EasyOPD `TeacherActorGroup` (raw SGLang actors that
+        # return hidden states, not logprobs) bound to the same teacher GPU
+        # pool that verl reserved for us.
+        self._easyopd_simple_sidecar = None
+        if self._is_cross_tokenizer_mode():
+            from easyopd.methods.simple.teacher_sidecar import EasyOPDSimpleTeacherSidecar
+
+            logger.info(
+                "[MultiTeacherModelManager] cross-tokenizer mode detected; "
+                "bypassing verl teacher pipeline, launching EasyOPD sidecar."
+            )
+            self._easyopd_simple_sidecar = EasyOPDSimpleTeacherSidecar(config)
+            return
+        # [EasyOPD:simple] End
+
         self._initialize_teacher_model_managers()
+
+    # [EasyOPD:simple]
+    def _is_cross_tokenizer_mode(self) -> bool:
+        loss_settings = getattr(
+            self.distillation_config.distillation_loss, "loss_settings", None
+        )
+        if loss_settings is None:
+            return False
+        return bool(getattr(loss_settings, "use_cross_tokenizer", False))
+
+    @property
+    def easyopd_simple_sidecar(self):
+        """Return the EasyOPD `simple` sidecar if active, else None."""
+        return self._easyopd_simple_sidecar
+    # [EasyOPD:simple] End
 
     def _initialize_teacher_model_managers(self):
         teacher_models = self.distillation_config.teacher_models
@@ -195,6 +227,15 @@ class MultiTeacherModelManager:
 
     def get_client(self) -> dict[str, LLMServerClient]:
         """Get the LLMServerClient for each teacher model."""
+        # [EasyOPD:simple]
+        if self._easyopd_simple_sidecar is not None:
+            # The sidecar is not an LLMServerClient — it exposes
+            # `compute_hidden_states_batch` instead. AgentLoopWorker
+            # detects this duck-type and calls into it directly.
+            return {
+                self._easyopd_simple_sidecar.teacher_key: self._easyopd_simple_sidecar
+            }
+        # [EasyOPD:simple] End
         teacher_clients = {}
         for key, manager in self.teacher_model_managers.items():
             teacher_clients[key] = LLMServerClient(

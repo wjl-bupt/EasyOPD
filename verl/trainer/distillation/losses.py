@@ -52,20 +52,32 @@ class DistillationLossSettings(BaseConfig):
         names (str | list[str]): Name(s) to register the distillation loss function under.
         use_topk (bool): Whether the loss function uses top-k log probabilities.
         use_estimator (bool): Whether the loss function uses single-sample KL estimators.
+        use_cross_tokenizer (bool): Whether the loss function operates across two
+            different tokenizers (student vs. teacher) and therefore needs the teacher's
+            full overlap-vocabulary logits rather than top-k logprobs / on-policy logprobs.
+            Added by EasyOPD `simple` method.
     """
 
     names: str | list[str] = field(default_factory=list)
     use_topk: bool = False
     use_estimator: bool = False
+    # [EasyOPD:simple]
+    use_cross_tokenizer: bool = False
+    # [EasyOPD:simple] End
 
     _mutable_fields = {"names"}
 
     def __post_init__(self):
         self.names = [self.names] if isinstance(self.names, str) else self.names
-        if sum([self.use_topk, self.use_estimator]) != 1:
+        # [EasyOPD:simple]
+        # Relax the original 2-way mutual exclusivity to 3-way to admit
+        # cross-tokenizer losses (e.g. EasyOPD `simple`).
+        if sum([self.use_topk, self.use_estimator, self.use_cross_tokenizer]) != 1:
             raise ValueError(
-                f"Expected only one of use_estimator, use_topk, but got {self.use_estimator=}, {self.use_topk=}."
+                "Expected exactly one of use_estimator, use_topk, use_cross_tokenizer, "
+                f"but got {self.use_estimator=}, {self.use_topk=}, {self.use_cross_tokenizer=}."
             )
+        # [EasyOPD:simple] End
 
 
 DISTILLATION_LOSS_REGISTRY: dict[str, DistillationLossFn] = {}
@@ -170,6 +182,7 @@ def distillation_ppo_loss(
     dp_group=None,
     student_logits: torch.Tensor = None,
     data_format: str = "thd",
+    cu_seqlens: torch.Tensor = None,
 ):
     """Loss function used both for logit processor and final policy loss.
     - student_logits is not None, compute the topk loss in logit processor.
@@ -194,6 +207,9 @@ def distillation_ppo_loss(
           - teacher_ids: (bsz, seqlen, topk)
         student_logits: (bsz, seqlen/cp_size, vocab_size/tp_size).
         data_format: "thd" or "bshd", models not support THD format, e.g GPT-OSS, Qwen3.5
+        cu_seqlens: optional [B+1] int sample boundaries, required by
+            cross-tokenizer losses (e.g. EasyOPD `simple`) when running on
+            rmpad logits.
 
     Returns:
     - student_logits is not None, return the topk loss tensor (bsz, seqlen/cp_size).
@@ -202,6 +218,40 @@ def distillation_ppo_loss(
 
     # Called as logits processor
     if student_logits is not None:
+        # [EasyOPD:simple/simct] route cross-tokenizer losses to the EasyOPD path.
+        loss_settings = distillation_config.distillation_loss.loss_settings
+        if getattr(loss_settings, "use_cross_tokenizer", False):
+            loss_mode = distillation_config.distillation_loss.loss_mode
+            if loss_mode in {"simct", "span_ctkd"}:
+                from easyopd.methods.simct.losses import (
+                    compute_simct_xtok_logits_processor,
+                )
+
+                return compute_simct_xtok_logits_processor(
+                    student_logits=student_logits,
+                    data=data,
+                    cu_seqlens=cu_seqlens,
+                    config=config,
+                    distillation_config=distillation_config,
+                )
+            if loss_mode == "simple":
+                from easyopd.methods.simple.losses import (
+                    compute_simple_xtok_logits_processor,
+                )
+
+                distillation_losses = compute_simple_xtok_logits_processor(
+                    student_logits=student_logits,
+                    data=data,
+                    cu_seqlens=cu_seqlens,
+                    config=config,
+                    distillation_config=distillation_config,
+                )
+                return {"distillation_losses": distillation_losses}
+            raise ValueError(
+                f"Unsupported EasyOPD cross-tokenizer loss mode: {loss_mode!r}. "
+                "Supported modes are: ['simple', 'simct', 'span_ctkd']."
+            )
+        # [EasyOPD:simple/simct] End
         return compute_topk_loss(config, distillation_config, data, student_logits, data_format)
 
     # Called as final policy loss
@@ -368,3 +418,34 @@ def compute_distillation_loss_reverse_kl_estimator(
         "distillation/abs_loss": Metric(AggregationType.MEAN, distillation_losses[response_mask_bool].abs().mean()),
     }
     return distillation_losses, metrics
+
+
+# [EasyOPD:simple/simct]
+# Register EasyOPD cross-tokenizer KD losses. The actual implementations live
+# under `easyopd/methods/*/losses.py`; we only trigger registration here so
+# that `loss_mode=simple`, `loss_mode=simct`, and the legacy
+# `loss_mode=span_ctkd` resolve correctly via `get_distillation_loss_fn`.
+# The imports are wrapped in try/except so environments without EasyOPD keep
+# working — these loss modes will simply be unavailable.
+try:
+    from easyopd.methods.simple.losses import register_simple_loss as _register_simple_loss
+
+    _register_simple_loss()
+except Exception as _easyopd_simple_err:  # pragma: no cover - defensive
+    import logging as _logging
+
+    _logging.getLogger(__name__).debug(
+        "EasyOPD `simple` distillation loss not registered: %s", _easyopd_simple_err
+    )
+
+try:
+    from easyopd.methods.simct.losses import register_simct_loss as _register_simct_loss
+
+    _register_simct_loss()
+except Exception as _easyopd_simct_err:  # pragma: no cover - defensive
+    import logging as _logging
+
+    _logging.getLogger(__name__).debug(
+        "EasyOPD `simct` distillation loss not registered: %s", _easyopd_simct_err
+    )
+# [EasyOPD:simple/simct] End

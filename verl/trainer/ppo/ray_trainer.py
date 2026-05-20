@@ -399,6 +399,24 @@ class RayPPOTrainer:
         except Exception as e:
             print(f"Warning: Could not set total_training_steps in config. Structure missing? Error: {e}")
 
+    def _shutdown_dataloader_workers(self):
+        """Best-effort shutdown for DataLoader workers before process teardown."""
+        for dataloader_name in ("train_dataloader", "val_dataloader"):
+            dataloader = getattr(self, dataloader_name, None)
+            iterator = getattr(dataloader, "_iterator", None)
+            shutdown_workers = getattr(iterator, "_shutdown_workers", None)
+            if shutdown_workers is None:
+                continue
+            try:
+                shutdown_workers()
+            except Exception as exception:
+                print(f"Warning: failed to shutdown {dataloader_name} workers: {exception}")
+            finally:
+                try:
+                    dataloader._iterator = None
+                except Exception:
+                    pass
+
     def _dump_generations(self, inputs, outputs, gts, scores, reward_extra_infos_dict, dump_path):
         """Dump rollout/validation samples as JSONL."""
         os.makedirs(dump_path, exist_ok=True)
@@ -1219,6 +1237,13 @@ class RayPPOTrainer:
             if is_distillation_enabled(self.config.get("distillation"))
             else False
         )
+        # [EasyOPD:simple]
+        distillation_use_cross_tokenizer = (
+            self.distillation_config.distillation_loss.loss_settings.use_cross_tokenizer
+            if is_distillation_enabled(self.config.get("distillation"))
+            else False
+        )
+        # [EasyOPD:simple] End
         ppo_mini_batch_size = self.config.actor_rollout_ref.actor.ppo_mini_batch_size
         ppo_mini_batch_size = ppo_mini_batch_size * self.config.actor_rollout_ref.rollout.n
         ppo_epochs = self.config.actor_rollout_ref.actor.ppo_epochs
@@ -1228,6 +1253,7 @@ class RayPPOTrainer:
             batch_td,
             calculate_entropy=calculate_entropy,
             distillation_use_topk=distillation_use_topk,
+            distillation_use_cross_tokenizer=distillation_use_cross_tokenizer,
             global_batch_size=ppo_mini_batch_size,
             mini_batch_size=ppo_mini_batch_size,
             epochs=ppo_epochs,
@@ -1305,6 +1331,8 @@ class RayPPOTrainer:
             pprint(f"Initial validation metrics: {val_metrics}")
             logger.log(data=val_metrics, step=self.global_steps)
             if self.config.trainer.get("val_only", False):
+                self._shutdown_dataloader_workers()
+                logger.finish(exit_code=0)
                 return
 
         if self.config.actor_rollout_ref.rollout.skip.get("enable", False):
@@ -1326,6 +1354,7 @@ class RayPPOTrainer:
             else False
         )
         next_step_profile = False
+        training_finished = False
 
         for epoch in range(current_epoch, self.config.trainer.total_epochs):
             for batch_dict in self.train_dataloader:
@@ -1655,11 +1684,18 @@ class RayPPOTrainer:
                     if hasattr(self.actor_rollout_wg, "async_calls_finalize_fn_exec"):
                         self.actor_rollout_wg.async_calls_finalize_fn_exec(blocking=True)
                     pprint(f"Final validation metrics: {last_val_metrics}")
-                    progress_bar.close()
-                    return
+                    training_finished = True
+                    break
 
                 # this is experimental and may be changed/removed in the future
                 # in favor of a general-purpose data buffer pool
                 if hasattr(self.train_dataset, "on_batch_end"):
                     # The dataset may be changed after each training batch
                     self.train_dataset.on_batch_end(batch=batch)
+
+            if training_finished:
+                break
+
+        progress_bar.close()
+        self._shutdown_dataloader_workers()
+        logger.finish(exit_code=0)

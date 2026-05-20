@@ -54,12 +54,40 @@ distillation_loss:
   # Upper bound for PPO clipping ratio.
   clip_ratio_high: 0.2
 
+  # [EasyOPD:simple]
+  # KL direction for the EasyOPD `simple` cross-tokenizer KD loss.
+  # Allowed values: "forward" (KL(student || teacher)) or "reverse" (KL(teacher || student)).
+  # Ignored for all other loss_modes.
+  cross_tokenizer_kl_direction: forward
+  # [EasyOPD:simple] End
+
 
 # Number of GPUs per node in the distillation teacher resource pool
 n_gpus_per_node: 8
 
 # Number of nodes in the distillation teacher resource pool
 nnodes: 0
+
+# [EasyOPD:simple]
+# Optional physical GPU ids for the EasyOPD simple teacher sidecar.
+# Examples: [0,1] for a dedicated teacher slice, or [0,1,2,3,4,5,6,7]
+# to colocate one teacher sidecar actor with one student GPU on every card.
+simple_teacher_gpu_ids: null
+
+# Optional CUDA_VISIBLE_DEVICES value for simple teacher actors. Use this when
+# the top-level process masks student GPUs but teacher actors must still see
+# physical teacher GPUs; e.g. top-level CUDA_VISIBLE_DEVICES=2,3,4,5,6,7 with
+# simple_teacher_visible_devices=[0,1,2,3,4,5,6,7].
+simple_teacher_visible_devices: null
+
+# Ray GPU resource fraction requested by each simple teacher actor.
+# Leave null to use 0.2 in dedicated mode and 0.0 when sharing the student pool.
+simple_teacher_num_gpus_per_actor: null
+
+# If true, Role.TeacherModel reuses the student/global pool instead of creating
+# a separate teacher placement group. Required for 8S+8T colocated layouts.
+simple_teacher_share_student_pool: false
+# [EasyOPD:simple] End
 
 # multi-teacher configs
 teacher_models:
