@@ -1183,6 +1183,94 @@ class RayPPOTrainer:
 
         return ref_log_prob
 
+    # ============ [EasyOPD:SOD] Step-wise OPD regularizer ============
+    def _apply_token_kl_regularizer(self, batch: DataProto, cfg) -> DataProto:
+        """Apply token-level KL regularizer (SOD step-wise weighted OPD).
+
+        After GRPO advantage computation, this method modifies the advantages
+        by adding a step-wise weighted OPD signal from the teacher model.
+
+        Args:
+            batch: DataProto containing 'advantages', 'old_log_probs', 'ref_log_prob', 'response_mask'.
+            cfg: TokenKLRegConfig instance.
+
+        Returns:
+            Modified batch with updated advantages.
+        """
+        if cfg is None or not getattr(cfg, "enable", False):
+            return batch
+        if "advantages" not in batch.batch:
+            return batch
+        if "ref_log_prob" not in batch.batch or "old_log_probs" not in batch.batch:
+            return batch
+
+        response_mask = batch.batch["response_mask"]
+        stepwise_enable = getattr(cfg, "stepwise_enable", False)
+
+        if stepwise_enable:
+            from easyopd.methods.sod.core import apply_stepwise_opd
+
+            epsilon = float(getattr(cfg, "stepwise_epsilon", 1e-6))
+            delta = float(getattr(cfg, "stepwise_delta", 0.5))
+            opd_coef = float(getattr(cfg, "stepwise_opd_coef", 1.0))
+
+            A_total, stepwise_weights, stepwise_log_info = apply_stepwise_opd(
+                advantages=batch.batch["advantages"],
+                old_log_probs=batch.batch["old_log_probs"],
+                ref_log_prob=batch.batch["ref_log_prob"],
+                response_mask=response_mask,
+                epsilon=epsilon,
+                delta=delta,
+                opd_coef=opd_coef,
+            )
+
+            batch.batch["advantages"] = A_total
+
+            # Write step-wise log for debugging
+            self._write_stepwise_log(stepwise_log_info, epsilon, delta, opd_coef)
+
+        return batch
+
+    def _write_stepwise_log(self, log_info: list, epsilon: float, delta: float, opd_coef: float):
+        """Write per-sample step-wise OPD weights (w_k) and divergence (d_k) to a log file."""
+        import datetime
+        import json
+        import os
+
+        default_dir = getattr(self.config.trainer, "default_local_dir", "outputs")
+        os.makedirs(default_dir, exist_ok=True)
+        log_path = os.path.join(default_dir, "stepwise_opd_weights.log")
+
+        try:
+            with open(log_path, "a", encoding="utf-8") as f:
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                f.write("=" * 80 + "\n")
+                f.write(f"  Global Step: {self.global_steps}  |  Time: {now}\n")
+                f.write(f"  Hyperparams: epsilon={epsilon}, delta={delta}, opd_coef={opd_coef}\n")
+                f.write("=" * 80 + "\n\n")
+
+                for idx, info in enumerate(log_info):
+                    n_steps = info["n_steps"]
+                    if n_steps == 0:
+                        continue
+                    d_values = info["d_values"]
+                    w_values = info["w_values"]
+                    f.write(f"  Sample {idx:>4d} | Steps: {n_steps} | "
+                            f"d_values: {[f'{d:.4f}' for d in d_values]} | "
+                            f"w_values: {[f'{w:.4f}' for w in w_values]}\n")
+
+                # Summary
+                all_n_steps = [info["n_steps"] for info in log_info]
+                all_d1 = [info["d_values"][0] for info in log_info if info["n_steps"] > 0]
+                all_w_last = [info["w_values"][-1] for info in log_info if info["n_steps"] > 0]
+                f.write(f"\n  Summary: {len(log_info)} samples | "
+                        f"avg_steps={sum(all_n_steps)/max(len(all_n_steps),1):.2f} | "
+                        f"avg_d1={sum(all_d1)/max(len(all_d1),1):.6f} | "
+                        f"avg_w_last={sum(all_w_last)/max(len(all_w_last),1):.6f}\n\n")
+        except Exception as exc:
+            print(f"Warning: failed to write stepwise log: {exc}")
+    # ============ [EasyOPD:SOD] End ============
+
     def _compute_old_log_prob(self, batch: DataProto):
         # TODO: remove step 1, 2, 4 after we make the whole training tensordict and padding free
         # step 1: convert dataproto to tensordict.
@@ -1568,6 +1656,12 @@ class RayPPOTrainer:
                             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
                             config=self.config.algorithm,
                         )
+
+                        # ============ [EasyOPD:SOD] Step-wise OPD weighting ============
+                        token_kl_cfg = getattr(self.config.algorithm, "token_kl_reg", None)
+                        if token_kl_cfg and getattr(token_kl_cfg, "enable", False):
+                            batch = self._apply_token_kl_regularizer(batch, token_kl_cfg)
+                        # ============ [EasyOPD:SOD] End ============
 
                     # update critic
                     if self.use_critic:

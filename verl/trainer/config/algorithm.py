@@ -17,7 +17,7 @@ from typing import Any, Optional
 
 from verl.base_config import BaseConfig
 
-__all__ = ["AlgoConfig", "FilterGroupsConfig", "KLControlConfig", "RolloutCorrectionConfig"]
+__all__ = ["AlgoConfig", "FilterGroupsConfig", "KLControlConfig", "RolloutCorrectionConfig", "TokenKLRegConfig"]
 
 
 @dataclass
@@ -54,6 +54,39 @@ class FilterGroupsConfig(BaseConfig):
     enable: bool = False
     metric: Optional[str] = None
     max_num_gen_batches: int = 0
+
+
+# ============ [EasyOPD:SOD] Token-level KL Regularizer Config ============
+@dataclass
+class TokenKLRegConfig(BaseConfig):
+    """Configuration for token-level KL regularizer (used by SOD).
+
+    SOD (Step-wise On-policy Distillation) uses this to adaptively re-weight
+    the OPD signal at each reasoning step based on student-teacher divergence.
+
+    Args:
+        enable (bool): Whether to enable the token KL regularizer.
+        coef (float): Global coefficient (legacy, use stepwise_opd_coef for SOD).
+        gamma (float): Gamma for gated OPD (legacy mode).
+        beta_min (float): Minimum beta for gated OPD (legacy mode).
+        beta_max (Optional[float]): Maximum beta for gated OPD (legacy mode).
+        stepwise_enable (bool): Enable step-wise mode (SOD core algorithm).
+        stepwise_epsilon (float): Numerical stability for d_k ratio (Eq. 7).
+        stepwise_delta (float): Upper bound offset, w_k <= 1 + delta (Eq. 7).
+        stepwise_opd_coef (float): Global coefficient for OPD term (Eq. 10).
+    """
+
+    enable: bool = False
+    coef: float = 0.0
+    gamma: float = 1.0
+    beta_min: float = 0.0
+    beta_max: Optional[float] = None
+    # Step-wise weighted OPD parameters (SOD)
+    stepwise_enable: bool = False
+    stepwise_epsilon: float = 1e-6
+    stepwise_delta: float = 0.5
+    stepwise_opd_coef: float = 1.0
+# ============ [EasyOPD:SOD] End ============
 
 
 @dataclass
@@ -667,3 +700,7 @@ class AlgoConfig(BaseConfig):
     # gdpo_reward_weights: per-dimension weights for aggregation (default: equal weights).
     gdpo_reward_keys: Optional[list[str]] = None
     gdpo_reward_weights: Optional[list[float]] = None
+    # ============ [EasyOPD:SOD] Token-level KL Regularizer ============
+    # Used by SOD for step-wise weighted OPD. Set to None to disable.
+    token_kl_reg: Optional[TokenKLRegConfig] = None
+    # ============ [EasyOPD:SOD] End ============

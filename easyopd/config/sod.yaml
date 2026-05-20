@@ -1,0 +1,53 @@
+# SOD: Step-wise On-policy Distillation Configuration
+# Paper: https://arxiv.org/abs/2605.07725
+#
+# This config defines the SOD-specific parameters for EasyOPD.
+# Use with: python3 -m verl.trainer.main_ppo ... +algorithm.token_kl_reg.enable=True ...
+# Or run: bash examples/sod/run_sod.sh
+
+method:
+  name: sod
+  description: "SOD: Step-wise On-policy Distillation for Small LM Agents"
+
+model:
+  # Student: SFT checkpoint (HuggingFace format)
+  student_model_path: "<Your_Student_Model_Path>"
+  # Teacher: GRPO-optimized checkpoint (HuggingFace format)
+  teacher_model_path: "<Your_Teacher_Model_Path>"
+
+training:
+  # verl standard training parameters
+  adv_estimator: grpo
+  clip_ratio_low: 0.2
+  clip_ratio_high: 0.28
+  loss_agg_mode: token-mean
+  actor_lr: 1e-6
+  train_batch_size: 64
+  ppo_mini_batch_size: 16
+  n_resp_per_prompt: 16
+  total_epochs: 1
+
+  # SOD-specific parameters (token_kl_reg)
+  token_kl_reg:
+    enable: true
+    stepwise_enable: true
+    stepwise_epsilon: 1e-6    # Eq. 7: numerical stability
+    stepwise_delta: 0.2       # Eq. 7: upper bound offset (paper Table 5)
+    stepwise_opd_coef: 1.0    # Eq. 10: OPD coefficient
+    # Legacy parameters (not used in stepwise mode)
+    gamma: 1.0
+    beta_min: 0.0
+    beta_max: 0.10
+
+rollout:
+  multi_turn:
+    enable: true
+    max_user_turns: 16
+    max_assistant_turns: 16
+    format: hermes
+  max_prompt_length: 2560
+  max_response_length: 20480
+
+data:
+  train_files: ["<path to RL training data>"]
+  val_files: ["<path to eval data>"]
