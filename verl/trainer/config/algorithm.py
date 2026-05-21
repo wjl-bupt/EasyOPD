@@ -67,6 +67,11 @@ class TokenKLRegConfig(BaseConfig):
     gamma: float = 1.0
     beta_min: float = 0.0
     beta_max: Optional[float] = None
+    # [EasyOPD:SOD] Step-wise OPD parameters
+    stepwise_enable: bool = False
+    stepwise_epsilon: float = 1e-6
+    stepwise_delta: float = 0.5
+    stepwise_opd_coef: float = 1.0
 
 
 @dataclass

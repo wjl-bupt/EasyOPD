@@ -222,7 +222,7 @@ def compute_score(completion, test_cases, task=None, timeout=30, is_long_penalty
                     message = None
                     ## Add Sandbox Fusion API
                     metrics = check_correctness(
-                            sandbox_fusion_url="https://sd72ileknjkrkkoplocgg.apigateway-cn-beijing.volceapi.com/run_code",
+                            sandbox_fusion_url=os.environ.get("SANDBOX_FUSION_URL", "<YOUR_SANDBOX_URL>"),  # [EasyOPD] Added for SOD: read from env
                             in_outs={'inputs':["prefix"],"outputs":["prefix"]},
                             generation=cur_solution,
                             timeout=timeout
@@ -288,7 +288,7 @@ def compute_score(completion, test_cases, task=None, timeout=30, is_long_penalty
                 
             # Add Sandbox Fusion API
             metrics = check_correctness(
-                sandbox_fusion_url = "https://sd72ileknjkrkkoplocgg.apigateway-cn-beijing.volceapi.com/run_code",
+                sandbox_fusion_url=os.environ.get("SANDBOX_FUSION_URL", "<YOUR_SANDBOX_URL>"),  # [EasyOPD] Added for SOD: read from env
                 in_outs=json.loads(json.dumps(test_cases)),
                 generation=solution,
                 timeout=timeout,

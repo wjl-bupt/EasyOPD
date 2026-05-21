@@ -706,6 +706,12 @@ class RayPPOTrainer:
             print(f"Warning: failed to record sample trace: {exc}")
 
     def _apply_token_kl_regularizer(self, batch: DataProto, cfg) -> DataProto:
+        """Apply token-level KL regularization to advantages.
+
+        Supports two modes:
+        - Stepwise mode (SOD): adaptive per-step weighting via easyopd.methods.sod.core
+        - Legacy mode: sigmoid-gated beta blending via compute_total_advantage
+        """
         if cfg is None or not getattr(cfg, "enable", False):
             return batch
         if "advantages" not in batch.batch:
@@ -714,29 +720,66 @@ class RayPPOTrainer:
             return batch
 
         response_mask = batch.batch["response_mask"]
-        raw_local_adv = (batch.batch["ref_log_prob"] - batch.batch["old_log_probs"]) * response_mask
-        base_adv = masked_mean(batch.batch["advantages"], response_mask, axis=1)
 
-        beta_max = getattr(cfg, "beta_max", None)
-        beta_min = float(getattr(cfg, "beta_min", 0.0))
-        if beta_max <= beta_min:
-            # no effective KL blending range
-            return batch
+        # ============ [EasyOPD:SOD] Step-wise OPD weighting ============
+        stepwise_enable = getattr(cfg, "stepwise_enable", False)
+        if stepwise_enable:
+            from easyopd.methods.sod.core import compute_stepwise_opd_weights
 
-        gamma = float(getattr(cfg, "gamma", 1.0))
+            raw_local_adv = (batch.batch["ref_log_prob"] - batch.batch["old_log_probs"]) * response_mask
+            epsilon = float(getattr(cfg, "stepwise_epsilon", 1e-6))
+            delta = float(getattr(cfg, "stepwise_delta", 0.5))
+            opd_coef = float(getattr(cfg, "stepwise_opd_coef", 1.0))
 
-        A_total_token, beta_jk, local_adv_used = compute_total_advantage(
-            base_adv,
-            raw_local_adv,
-            gamma=gamma,
-            beta_min=beta_min,
-            beta_max=beta_max,
-        )
-        batch.batch["advantages"] = A_total_token
-        batch.meta_info.setdefault("token_kl_reg", {})
-        batch.meta_info["token_kl_reg"].update(
-            {"beta_jk": beta_jk.detach().clone(), "local_adv": local_adv_used.detach().clone()}
-        )
+            stepwise_weights, stepwise_log_info = compute_stepwise_opd_weights(
+                old_log_probs=batch.batch["old_log_probs"],
+                ref_log_prob=batch.batch["ref_log_prob"],
+                response_mask=response_mask,
+                epsilon=epsilon,
+                delta=delta,
+            )
+            stepwise_weights = stepwise_weights.to(raw_local_adv.device)
+
+            # Weighted OPD signal: w_k * (ref_log_prob - old_log_probs) per token
+            weighted_opd = opd_coef * stepwise_weights * raw_local_adv
+
+            # Total advantage: A_GRPO (broadcast to token dim) + weighted OPD
+            grpo_adv = batch.batch["advantages"]
+            if grpo_adv.dim() == 1:
+                A_total_token = grpo_adv.unsqueeze(1) + weighted_opd
+            else:
+                A_total_token = grpo_adv + weighted_opd
+
+            batch.batch["advantages"] = A_total_token
+            batch.meta_info.setdefault("token_kl_reg", {})
+            batch.meta_info["token_kl_reg"].update(
+                {"stepwise_weights": stepwise_weights.detach().clone(), "local_adv": raw_local_adv.detach().clone()}
+            )
+        # ============ [EasyOPD:SOD] End ============
+        else:
+            # Legacy mode: sigmoid-gated beta blending
+            raw_local_adv = (batch.batch["ref_log_prob"] - batch.batch["old_log_probs"]) * response_mask
+            base_adv = masked_mean(batch.batch["advantages"], response_mask, axis=1)
+
+            beta_max = getattr(cfg, "beta_max", None)
+            beta_min = float(getattr(cfg, "beta_min", 0.0))
+            if beta_max is None or beta_max <= beta_min:
+                return batch
+
+            gamma = float(getattr(cfg, "gamma", 1.0))
+
+            A_total_token, beta_jk, local_adv_used = compute_total_advantage(
+                base_adv,
+                raw_local_adv,
+                gamma=gamma,
+                beta_min=beta_min,
+                beta_max=beta_max,
+            )
+            batch.batch["advantages"] = A_total_token
+            batch.meta_info.setdefault("token_kl_reg", {})
+            batch.meta_info["token_kl_reg"].update(
+                {"beta_jk": beta_jk.detach().clone(), "local_adv": local_adv_used.detach().clone()}
+            )
         return batch
 
     def _maybe_log_val_generations(self, inputs, outputs, scores, gts=None):

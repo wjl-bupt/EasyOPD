@@ -1,0 +1,26 @@
+# Sandbox Configuration for SOD Multi-turn Code Execution
+# You MUST replace the sandbox_fusion_url with your own sandbox service URL.
+tools:
+  - class_name: "examples.sod.reward.CustomSandboxFusionTool"
+    config:
+      sandbox_fusion_url: "<YOUR_SANDBOX_URL>"
+      num_workers: 32
+      enable_global_rate_limit: true
+      rate_limit: 128
+      default_timeout: 60
+      default_language: "python"
+      memory_limit_mb: 2048
+      type: native
+
+    tool_schema:
+      type: "function"
+      function:
+        name: "code_interpreter"
+        description: "A tool for executing code."
+        parameters:
+          type: "object"
+          properties:
+            code:
+              type: "string"
+              description: "The code to execute."
+          required: ["code"]

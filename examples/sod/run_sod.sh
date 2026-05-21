@@ -2,40 +2,41 @@
 # SOD: Step-wise On-policy Distillation Training Script
 # Paper: https://arxiv.org/abs/2605.07725
 #
-# Hardware Requirements: 8x NVIDIA H20 96GB GPUs
-# Environment: conda activate OpenAgentRL (vLLM 0.8.5, PyTorch 2.4+)
+# Hardware Requirements: 8x NVIDIA H20 96GB GPUs (>=88GB per GPU)
+# Environment: Python 3.10+, vLLM 0.8.x, PyTorch 2.4+
 #
 # Usage:
 #   1. Edit the paths below to match your environment
-#   2. Run: bash examples/sod/run_sod.sh
+#   2. Edit examples/sod/sandbox_fusion_tool_config.yaml to set sandbox URL
+#   3. Run: bash examples/sod/run_sod.sh
+#
+# Before running, ensure:
+#   - All 8 GPUs are free (nvidia-smi shows 0 MiB usage)
+#   - VLLM_USE_V1=1 is set (required for async vLLM rollout)
+#   - Sandbox URL is configured in sandbox_fusion_tool_config.yaml
 
 set -e
 
 # ============ Environment Setup ============
-# Uncomment and modify if you need internet proxy
-# source /path/to/enable_internet_proxy.sh
-
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
-export VLLM_USE_V1=1
+export VLLM_USE_V1=1  # Required: enables vLLM V1 engine for async rollout
+export SANDBOX_FUSION_URL="<YOUR_SANDBOX_URL>"  # Required: sandbox API for code execution (used by rollout + evaluation)
 
-# ============ Model Paths ============
-# Student model (to be trained)
+# ============ Model Paths (MUST EDIT) ============
+# Student model: HuggingFace format SFT checkpoint to be trained
 STUDENT_MODEL_PATH="/path/to/student_model"
-# Teacher model (reference for KL regularization)
+# Teacher model: HuggingFace format teacher model for KL regularization
 TEACHER_MODEL_PATH="/path/to/teacher_model"
 
-# ============ Dataset Paths ============
+# ============ Dataset Paths (MUST EDIT) ============
 TRAIN_DATA="/path/to/Open-AgentRL-30K.parquet"
 VAL_DATA_1="/path/to/aime_2025_problems.parquet"
 VAL_DATA_2="/path/to/aime_2024_problems.parquet"
 
-# ============ Output Paths ============
+# ============ Output Configuration ============
 SAVE_DIR="./checkpoint/sod_training"
 PROJECT_NAME="sod_training"
 EXPERIMENT_NAME="sod_run"
-
-# ============ Sandbox Configuration ============
-# Edit recipe/demystify/sandbox_fusion_tool_config.yaml to set your sandbox URL
 
 # ============ Training ============
 python3 -m verl.trainer.main_ppo \
@@ -61,9 +62,9 @@ python3 -m verl.trainer.main_ppo \
     data.max_response_length=20480 \
     data.filter_overlong_prompts=True \
     data.truncation=error \
-    data.custom_cls.path=recipe/demystify/reward.py \
+    data.custom_cls.path=examples/sod/reward.py \
     data.custom_cls.name=CustomRLHFDataset \
-    custom_reward_function.path=recipe/demystify/reward.py \
+    custom_reward_function.path=examples/sod/reward.py \
     custom_reward_function.name=compute_score \
     actor_rollout_ref.model.path=${STUDENT_MODEL_PATH} \
     actor_rollout_ref.model.use_remove_padding=True \
@@ -89,7 +90,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.multi_turn.enable=True \
     actor_rollout_ref.rollout.multi_turn.max_user_turns=16 \
     actor_rollout_ref.rollout.multi_turn.max_assistant_turns=16 \
-    actor_rollout_ref.rollout.multi_turn.tool_config_path=recipe/demystify/sandbox_fusion_tool_config.yaml \
+    actor_rollout_ref.rollout.multi_turn.tool_config_path=examples/sod/sandbox_fusion_tool_config.yaml \
     actor_rollout_ref.rollout.multi_turn.format=hermes \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.75 \
     actor_rollout_ref.rollout.n=16 \
