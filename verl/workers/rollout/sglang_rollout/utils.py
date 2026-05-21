@@ -21,9 +21,6 @@ import torch
 import torch.distributed as dist
 
 from verl.utils.device import get_device_name
-from verl.workers.rollout.utils import ensure_async_iterator
-
-SGLANG_LORA_NAME = "verl_actor_lora_name"
 
 
 def broadcast_pyobj(
@@ -71,7 +68,7 @@ def broadcast_pyobj(
         return data
 
 
-async def get_named_tensor_buckets(
+def get_named_tensor_buckets(
     iterable: Iterator[tuple[str, torch.Tensor]], bucket_bytes: int
 ) -> Iterator[list[tuple[str, torch.Tensor]]]:
     """
@@ -96,15 +93,15 @@ async def get_named_tensor_buckets(
 
     current_bucket = []
     current_size = 0
-    async for name, tensor in ensure_async_iterator(iterable):
+    for name, tensor in iterable:
         tensor_size = tensor.element_size() * tensor.numel()
         if current_size + tensor_size > bucket_bytes:
             if current_bucket:
                 yield current_bucket
-            current_bucket = [(name, tensor.clone())]
+            current_bucket = [(name, tensor)]
             current_size = tensor_size
         else:
-            current_bucket.append((name, tensor.clone()))
+            current_bucket.append((name, tensor))
             current_size += tensor_size
 
     if current_bucket:

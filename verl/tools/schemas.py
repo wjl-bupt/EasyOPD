@@ -21,12 +21,9 @@ from pydantic import BaseModel, Field, model_validator
 class OpenAIFunctionPropertySchema(BaseModel):
     """The schema of a parameter in OpenAI format."""
 
-    # Union's type is list[str], e.g. ["integer", "number"] for int | float unions.
-    type: str | list[str]
+    type: str
     description: str | None = None
-    # JSON Schema's ``enum`` accepts any JSON value, not just strings, so
-    # ``Literal[1, 2, 3]`` -> ``enum: [1, 2, 3]`` is a valid schema.
-    enum: list[Any] | None = None
+    enum: list[str] | None = None
 
 
 class OpenAIFunctionParametersSchema(BaseModel):
@@ -34,8 +31,7 @@ class OpenAIFunctionParametersSchema(BaseModel):
 
     type: str
     properties: dict[str, OpenAIFunctionPropertySchema]
-    # ``required`` can be omitted when no parameter is required.
-    required: list[str] = Field(default_factory=list)
+    required: list[str]
 
 
 class OpenAIFunctionSchema(BaseModel):
@@ -121,7 +117,4 @@ class ToolResponse(BaseModel):
         return values
 
     def is_empty(self) -> bool:
-        return not self.text and not self.image and not self.video
-
-    def is_text_only(self) -> bool:
-        return self.text and not self.image and not self.video
+        return self.text is None and self.image is None and self.video is None

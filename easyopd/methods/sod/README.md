@@ -2,190 +2,167 @@
 
 ## Method Overview
 
-SOD (Step-wise On-policy Distillation) addresses the instability of standard OPD in tool-integrated reasoning (TIR) scenarios. When a student model makes erroneous tool calls, cascade failures cause the student-teacher divergence to grow super-linearly, making the teacher's token-level supervision unreliable.
+SOD addresses the instability of standard OPD in tool-integrated reasoning (TIR) scenarios.
+It adaptively re-weights the distillation strength at each reasoning step based on the divergence trajectory.
 
-SOD adaptively re-weights the distillation strength at each reasoning step based on the divergence trajectory:
-- When divergence increases (cascade failure), weights decrease → prevent harmful supervision.
-- When the student recovers alignment, weights are restored → maintain effective distillation.
-
-**Paper:** [SOD: Step-wise On-policy Distillation for Small Language Model Agents](https://arxiv.org/abs/2605.07725)
+**Paper:** https://arxiv.org/abs/2605.07725
 
 ---
 
 ## Environment Requirements
 
-| Dependency | Version |
-|-----------|---------|
-| Python | >= 3.10 |
-| CUDA | >= 12.1 (recommended 12.6) |
-| PyTorch | >= 2.4 |
-| vLLM | >= 0.8.4 (for async rollout) |
-| flash-attn | >= 2.5 |
-| verl | installed via `pip install -e .` (EasyOPD root) |
+| Dependency | Version | Notes |
+|-----------|---------|-------|
+| Python | >= 3.10 | Tested with 3.11 |
+| CUDA | >= 12.1 | Tested with 12.4 |
+| PyTorch | >= 2.4 | |
+| vLLM | 0.8.4-0.8.5 | Tested with 0.8.5.post1 |
+| flash-attn | >= 2.5 | |
+| Ray | >= 2.10 | For distributed training |
+| verl | From source | pip install -e . from EasyOPD root |
 
-### Installation
+### Hardware Requirements
+
+- **8x NVIDIA H20 96GB GPUs**
+- batch_size=64, n=16 (1024 rollout samples per step)
+- infer_tp=4, train_sp=4
+- Peak GPU memory: ~88 GB per GPU
+
+---
+
+## Quick Start
+
+### 1. Environment Setup
 
 ```bash
-# From EasyOPD root directory
+# Activate the conda environment with vLLM 0.8.5
+conda activate OpenAgentRL
+
+# Enable internet proxy (if needed for sandbox access)
+source /path/to/enable_internet_proxy.sh
+
+# Set environment variables
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export VLLM_USE_V1=1
+```
+
+### 2. Install EasyOPD
+
+```bash
+cd /path/to/EasyOPD
 pip install -e .
-pip install flash-attn --no-build-isolation
-pip install vllm
 ```
 
-Additional dependencies (for reward computation):
+### 3. Run Training
+
 ```bash
-pip install latex2sympy2_extended math_verify
+cd /path/to/EasyOPD
+bash examples/sod/run_sod.sh
 ```
+
+Or run directly with custom parameters (see examples/sod/run_sod.sh for full command).
 
 ---
 
 ## File Structure
 
 ```
-easyopd/methods/sod/
-├── __init__.py          # Method registration, metadata, and exports
-├── core.py              # Core algorithm implementation
-└── README.md            # This file
-
-easyopd/config/
-└── sod.yaml             # SOD configuration template (yaml reference)
-
-examples/sod/
-└── run_sod.sh           # Complete training launch script
-```
-
-### File Descriptions
-
-| File | Description |
-|------|-------------|
-| `easyopd/methods/sod/core.py` | Core algorithm: `_extract_step_boundaries()` identifies assistant turns from response_mask; `compute_stepwise_opd_weights()` computes per-token w_k weights (Eq. 6, 7); `apply_stepwise_opd()` applies weighted OPD to advantages (Eq. 10). |
-| `easyopd/methods/sod/__init__.py` | Exports `compute_stepwise_opd_weights`, `apply_stepwise_opd`, and `SODMethod` class with metadata. |
-| `easyopd/config/sod.yaml` | YAML configuration template defining model paths, training hyperparameters, SOD-specific parameters, rollout settings, and data paths. |
-| `examples/sod/run_sod.sh` | Bash script that launches the full SOD training pipeline via `python3 -m verl.trainer.main_ppo` with all necessary hydra overrides. |
-
-### Modified verl Files
-
-| File | Modification | Reason |
-|------|-------------|--------|
-| `verl/trainer/config/algorithm.py` | Added `TokenKLRegConfig` dataclass (enable, coef, gamma, beta_min, beta_max, stepwise_enable, stepwise_epsilon, stepwise_delta, stepwise_opd_coef) | SOD needs config fields for step-wise OPD parameters |
-| `verl/trainer/ppo/ray_trainer.py` | Added `_apply_token_kl_regularizer()` method and `_write_stepwise_log()` method; added call site after `compute_advantage()` | Core algorithm entry point that injects weighted OPD into advantages |
-
----
-
-## Key Equations
-
-- **Eq. 6 (Step Divergence):**
-  ```
-  d_k = (1/|I_k|) * Σ_{t∈I_k} |log π_θ(y_t) - log π_teacher(y_t)|
-  ```
-- **Eq. 7 (Adaptive Weight):**
-  ```
-  w_k = min( ∏_{u=1}^{k-1} (d_u + ε)/(d_{u+1} + ε),  1 + δ )
-  ```
-- **Eq. 10 (Training Objective):**
-  ```
-  L = L_GRPO + opd_coef * w_k * (log π_teacher - log π_θ)
-  ```
-
----
-
-## Configuration
-
-### SOD-Specific Hyperparameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `algorithm.token_kl_reg.enable` | bool | `False` | Master switch: enable the token KL regularizer module |
-| `algorithm.token_kl_reg.stepwise_enable` | bool | `False` | Enable step-wise mode (SOD core algorithm) |
-| `algorithm.token_kl_reg.stepwise_epsilon` | float | `1e-6` | ε in Eq. 7: numerical stability for d_k ratio |
-| `algorithm.token_kl_reg.stepwise_delta` | float | `0.5` | δ in Eq. 7: upper bound offset, w_k ≤ 1+δ |
-| `algorithm.token_kl_reg.stepwise_opd_coef` | float | `1.0` | Global coefficient for the OPD term in Eq. 10 |
-| `algorithm.token_kl_reg.gamma` | float | `1.0` | Legacy: gamma for gated OPD (not used in stepwise mode) |
-| `algorithm.token_kl_reg.beta_min` | float | `0.0` | Legacy: minimum beta (not used in stepwise mode) |
-| `algorithm.token_kl_reg.beta_max` | float | `None` | Legacy: maximum beta (not used in stepwise mode) |
-
-### Key Training Parameters
-
-| Parameter | Recommended Value | Description |
-|-----------|-------------------|-------------|
-| `actor_rollout_ref.model.path` | Student SFT ckpt | Student model (HuggingFace format) |
-| `+actor_rollout_ref.ref.model.path` | Teacher GRPO ckpt | Teacher model loaded as ref policy |
-| `actor_rollout_ref.rollout.multi_turn.enable` | `True` | Required for TIR (tool-integrated reasoning) |
-| `actor_rollout_ref.rollout.multi_turn.format` | `hermes` | Chat template format |
-| `actor_rollout_ref.rollout.multi_turn.max_user_turns` | `16` | Max tool interaction rounds |
-| `algorithm.adv_estimator` | `grpo` | Advantage estimator (SOD builds on GRPO) |
-| `data.max_response_length` | `20480` | Long responses for multi-turn agent tasks |
-
-### How to Pass SOD Parameters via Command Line
-
-```bash
-python3 -m verl.trainer.main_ppo \
-    +algorithm.token_kl_reg.enable=True \
-    +algorithm.token_kl_reg.stepwise_enable=True \
-    +algorithm.token_kl_reg.stepwise_epsilon=1e-6 \
-    +algorithm.token_kl_reg.stepwise_delta=0.2 \
-    +algorithm.token_kl_reg.stepwise_opd_coef=1.0 \
-    ... (other parameters)
+EasyOPD/
+ easyopd/methods/sod/
+   ├── __init__.py          # Exports and metadata
+   ├── core.py              # Core SOD algorithm (stepwise KL regularizer)
+   └── README.md            # This file
+ easyopd/config/sod.yaml  # Config template
+ examples/sod/run_sod.sh  # Training launch script
+ recipe/demystify/
+   ├── reward.py            # Reward function with sandbox code execution
+   └── sandbox_fusion_tool_config.yaml  # Sandbox URL and tool config
+ verl/
+    ├── trainer/config/algorithm.py      # TokenKLRegConfig dataclass
+    ├── trainer/ppo/ray_trainer.py       # _apply_token_kl_regularizer()
+    ├── tools/sandbox_fusion_tools.py    # Sandbox execution tool
+    └── utils/reward_score/livecodebench/  # LiveCodeBench evaluation
 ```
 
 ---
 
-## Reproduction Steps
+## Configuration Details
 
-### 1. Data Preparation
+### SOD-specific Parameters
 
-Prepare RL training data in verl's expected format (parquet with `chat` column containing multi-turn conversations). The paper uses the Open-AgentRL dataset.
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `token_kl_reg.enable` | True | Enable token-level KL regularization |
+| `token_kl_reg.gamma` | 1.0 | Discount factor for KL penalty |
+| `token_kl_reg.beta_min` | 0.0 | Minimum KL coefficient |
+| `token_kl_reg.beta_max` | 0.10 | Maximum KL coefficient |
+| `token_kl_reg.stepwise_enable` | True | Enable step-wise adaptive weighting |
+| `token_kl_reg.stepwise_epsilon` | 1e-6 | Numerical stability epsilon |
+| `token_kl_reg.stepwise_delta` | 0.2 | Divergence threshold for step weighting |
+| `token_kl_reg.stepwise_opd_coef` | 1.0 | OPD loss coefficient |
 
-### 2. Model Preparation
+### Sandbox Configuration
 
-- **Student model:** An SFT checkpoint fine-tuned on agent tasks (e.g., Qwen3-0.6B-SFT or Qwen3-1.7B-SFT)
-- **Teacher model:** A GRPO-optimized checkpoint with strong reasoning ability (e.g., Qwen3-4B-GRPO)
+Edit `recipe/demystify/sandbox_fusion_tool_config.yaml` to set your sandbox URL:
 
-### 3. Configure and Run
-
-Edit the paths in `examples/sod/run_sod.sh`:
-```bash
-# Set your model paths
-export STUDENT_MODEL_PATH="/path/to/student/checkpoint"
-export TEACHER_MODEL_PATH="/path/to/teacher/checkpoint"
-
-# Set your data paths
-export OPEN_AGENT_RL="/path/to/training_data.parquet"
-export AIME_2024="/path/to/aime2024_eval.parquet"
-export AIME_2025="/path/to/aime2025_eval.parquet"
-
-# Launch training
-bash examples/sod/run_sod.sh
+```yaml
+tools:
+  - class_name: "recipe.demystify.reward.CustomSandboxFusionTool"
+    config:
+      sandbox_fusion_url: "YOUR_SANDBOX_URL_HERE"
+      num_workers: 32
+      enable_global_rate_limit: true
+      rate_limit: 128
+      default_timeout: 60
+      default_language: "python"
 ```
-
-### 4. Hardware Requirements
-
-- **Training Resources:** 8× NVIDIA H20 96GB GPUs, batch size 64
-- The script uses `infer_tp=4` (4-way tensor parallelism for vLLM rollout) and `train_sp=4` (4-way sequence parallelism for training)
-
-### 5. Monitoring
-
-- WandB logging is enabled by default (set `WANDB_API_KEY`)
-- Step-wise OPD weights are logged to `<checkpoint_dir>/stepwise_opd_weights.log`
-- Checkpoints saved every 10 steps to `./checkpoint/<experiment_name>/`
 
 ---
 
-## Experimental Results (from paper)
+## Validated Results
 
-| Model | AIME 2024 | AIME 2025 | GPQA | LiveCodeBench |
-|-------|-----------|-----------|------|---------------|
-| Qwen3-0.6B + SOD | 40.00 | 26.13 | 40.91 | 31.55 |
-| Qwen3-1.7B + SOD | 56.67 | 40.00 | 48.99 | 42.86 |
+Successfully validated with the following configuration:
+
+- **Environment**: conda env OpenAgentRL (Python 3.11, vLLM 0.8.5.post1)
+- **Hardware**: 8x NVIDIA H20 96GB GPUs
+- **Student Model**: Qwen3-1.7B-SFT
+- **Teacher Model**: DemyAgent-4B
+- **Dataset**: Open-AgentRL-30K
+
+### Step 1 Metrics (Verified):
+
+| Metric | Value |
+|--------|-------|
+| actor/token_kl/mean | -0.314 |
+| actor/pg_loss | 0.010 |
+| actor/entropy | 0.435 |
+| critic/score/mean | -0.572 |
+| rollout/tool_calls_avg | 3.21 |
+| rollout/tool_success_rate | 74.5% |
+| num_turns/mean | 8.42 |
+| timing_s/step | ~1383s (~23min) |
+| perf/throughput | 458 tokens/s |
+| perf/max_memory_allocated_gb | 88.2 |
 
 ---
 
 ## Troubleshooting
 
-| Issue | Solution |
-|-------|----------|
-| `ImportError: No module named 'easyopd'` | Run `pip install -e .` from EasyOPD root |
-| `KeyError: 'response_mask'` | Ensure `multi_turn.enable=True` in rollout config |
-| `KeyError: 'ref_log_prob'` | Ensure `+actor_rollout_ref.ref.model.path` is set (teacher model) |
-| OOM during training | Reduce `ppo_mini_batch_size` or enable `param_offload=True` |
-| All w_k = 1.0 | Normal for single-step responses; SOD only activates for multi-step |
+### 1. GPU OOM (No available memory for cache blocks)
+**Error**: `ValueError: No available memory for the cache blocks`
+**Cause**: Other processes occupying GPU memory
+**Solution**: Ensure all GPUs are free before starting training. Check with `nvidia-smi`.
+
+### 2. WandB API Key
+**Error**: `wandb.errors.errors.UsageError: No API key`
+**Solution**: Use `trainer.logger=['console']` to disable wandb, or set `WANDB_API_KEY` environment variable.
+
+### 3. Sandbox API Errors (500)
+**Error**: `API Request Error: 500 Server Error`
+**Cause**: Sandbox service temporary unavailability
+**Solution**: These are transient errors and won't crash training. The reward function handles them gracefully.
+
+### 4. FlashInfer Warning
+**Warning**: `FlashInfer is not available. Falling back to PyTorch-native implementation`
+**Impact**: Slightly slower sampling, does not affect correctness.
+**Solution**: Install FlashInfer for better performance (optional).

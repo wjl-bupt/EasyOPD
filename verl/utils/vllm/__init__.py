@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .npu_vllm_patch import check_vllm_ascend_before_server_launch
 from .utils import TensorLoRARequest, VLLMHijack, is_version_ge
 
 # The contents of vllm/patch.py should not be imported here, because the contents of
@@ -24,5 +23,4 @@ __all__ = [
     "TensorLoRARequest",
     "VLLMHijack",
     "is_version_ge",
-    "check_vllm_ascend_before_server_launch",
 ]

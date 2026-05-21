@@ -14,7 +14,6 @@
 
 from ..device import is_npu_available
 from ..import_utils import is_nvtx_available
-from .config import build_sglang_profiler_args, build_vllm_profiler_args
 from .performance import GPUMemoryLogger, log_gpu_memory_usage, simple_timer
 from .profile import DistProfiler, DistProfilerExtension, ProfilerConfig
 
@@ -38,6 +37,4 @@ __all__ = [
     "ProfilerConfig",
     "simple_timer",
     "marked_timer",
-    "build_vllm_profiler_args",
-    "build_sglang_profiler_args",
 ]

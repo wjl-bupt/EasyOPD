@@ -16,21 +16,11 @@ A unified tracking interface that supports logging data to different backend
 """
 
 import dataclasses
-import json
-import logging
 import os
-import sys
 from enum import Enum
 from functools import partial
 from pathlib import Path
 from typing import Any
-
-import orjson
-
-logger = logging.getLogger(__name__)
-
-MLFLOW_MAX_ATTEMPTS = 3
-MLFLOW_SLEEP_SECONDS = 5
 
 
 class Tracking:
@@ -44,17 +34,7 @@ class Tracking:
         logger: Dictionary of initialized logger instances for each backend.
     """
 
-    supported_backend = [
-        "wandb",
-        "mlflow",
-        "swanlab",
-        "vemlp_wandb",
-        "tensorboard",
-        "console",
-        "clearml",
-        "trackio",
-        "file",
-    ]
+    supported_backend = ["wandb", "mlflow", "swanlab", "vemlp_wandb", "tensorboard", "console", "clearml", "trackio"]
 
     def __init__(self, project_name, experiment_name, default_backend: str | list[str] = "console", config=None):
         if isinstance(default_backend, str):
@@ -68,18 +48,14 @@ class Tracking:
                 assert backend in self.supported_backend, f"{backend} is not supported"
 
         self.logger = {}
-        self._finished = False
 
         if "tracking" in default_backend or "wandb" in default_backend:
-            import os
-
             import wandb
 
             settings = None
             if config and config["trainer"].get("wandb_proxy", None):
                 settings = wandb.Settings(https_proxy=config["trainer"]["wandb_proxy"])
-            entity = os.environ.get("WANDB_ENTITY", None)
-            wandb.init(project=project_name, name=experiment_name, entity=entity, config=config, settings=settings)
+            wandb.init(project=project_name, name=experiment_name, config=config, settings=settings)
             self.logger["wandb"] = wandb
 
         if "trackio" in default_backend:
@@ -90,38 +66,18 @@ class Tracking:
 
         if "mlflow" in default_backend:
             import os
-            import time
 
             import mlflow
 
-            for _mlflow_attempt in range(1, MLFLOW_MAX_ATTEMPTS + 1):
-                try:
-                    MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "sqlite:////tmp/mlruns.db")
-                    logger.info("Using MLFlow tracking URI: %s", MLFLOW_TRACKING_URI)
-                    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+            MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "sqlite:////tmp/mlruns.db")
+            mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
-                    # Some cloud providers like Azure ML or Databricks automatically set MLFLOW_RUN_ID
-                    # If set, attach to the existing run instead of creating a new one
-                    run_id = os.environ.get("MLFLOW_RUN_ID")
-                    if run_id:
-                        mlflow.start_run(run_id=run_id)
-                    else:
-                        # Project_name is actually experiment_name in MLFlow
-                        # If experiment does not exist, will create a new experiment
-                        experiment = mlflow.set_experiment(project_name)
-                        mlflow.start_run(experiment_id=experiment.experiment_id, run_name=experiment_name)
-
-                    mlflow.log_params(_compute_mlflow_params_from_objects(config))
-                    self.logger["mlflow"] = _MlflowLoggingAdapter()
-                    break  # Success
-                except Exception as e:
-                    logger.warning(
-                        "MLflow initialization attempt %d/%d failed: %s", _mlflow_attempt, MLFLOW_MAX_ATTEMPTS, e
-                    )
-                    if _mlflow_attempt < MLFLOW_MAX_ATTEMPTS:
-                        time.sleep(MLFLOW_SLEEP_SECONDS)
-                    else:
-                        logger.warning("All MLflow initialization attempts failed. Proceeding without MLflow tracking.")
+            # Project_name is actually experiment_name in MLFlow
+            # If experiment does not exist, will create a new experiment
+            experiment = mlflow.set_experiment(project_name)
+            mlflow.start_run(experiment_id=experiment.experiment_id, run_name=experiment_name)
+            mlflow.log_params(_compute_mlflow_params_from_objects(config))
+            self.logger["mlflow"] = _MlflowLoggingAdapter()
 
         if "swanlab" in default_backend:
             import os
@@ -177,53 +133,24 @@ class Tracking:
         if "clearml" in default_backend:
             self.logger["clearml"] = ClearMLLogger(project_name, experiment_name, config)
 
-        if "file" in default_backend:
-            self.logger["file"] = FileLogger(project_name, experiment_name)
-
     def log(self, data, step, backend=None):
-        if self._finished:
-            return
         for default_backend, logger_instance in self.logger.items():
             if backend is None or default_backend in backend:
                 logger_instance.log(data=data, step=step)
 
-    def finish(self, exit_code: int = 0):
-        if getattr(self, "_finished", True):
-            return
-        self._finished = True
-        logger_instances = getattr(self, "logger", {})
-
-        finish_callbacks = {
-            "wandb": lambda logger_instance: logger_instance.finish(exit_code=exit_code),
-            "swanlab": lambda logger_instance: logger_instance.finish(),
-            "vemlp_wandb": lambda logger_instance: logger_instance.finish(exit_code=exit_code),
-            "tensorboard": lambda logger_instance: logger_instance.finish(),
-            "clearml": lambda logger_instance: logger_instance.finish(),
-            "trackio": lambda logger_instance: logger_instance.finish(),
-            "file": lambda logger_instance: logger_instance.finish(),
-        }
-
-        for backend, finish_callback in finish_callbacks.items():
-            logger_instance = logger_instances.get(backend)
-            if logger_instance is None:
-                continue
-            try:
-                finish_callback(logger_instance)
-            except Exception as exception:
-                if not sys.is_finalizing():
-                    try:
-                        logger.warning("Failed to finish %s logger: %s", backend, exception)
-                    except Exception:
-                        pass
-
     def __del__(self):
-        try:
-            self.finish(exit_code=0)
-        except Exception:
-            # Never raise from object finalizers; dependencies such as logging,
-            # W&B's service process, or DataLoader workers may already be gone
-            # during interpreter shutdown.
-            pass
+        if "wandb" in self.logger:
+            self.logger["wandb"].finish(exit_code=0)
+        if "swanlab" in self.logger:
+            self.logger["swanlab"].finish()
+        if "vemlp_wandb" in self.logger:
+            self.logger["vemlp_wandb"].finish(exit_code=0)
+        if "tensorboard" in self.logger:
+            self.logger["tensorboard"].finish()
+        if "clearnml" in self.logger:
+            self.logger["clearnml"].finish()
+        if "trackio" in self.logger:
+            self.logger["trackio"].finish()
 
 
 class ClearMLLogger:
@@ -275,29 +202,7 @@ class ClearMLLogger:
                 )
 
     def finish(self):
-        self._task.close()
-
-
-class FileLogger:
-    def __init__(self, project_name: str, experiment_name: str):
-        self.project_name = project_name
-        self.experiment_name = experiment_name
-
-        self.filepath = os.getenv("VERL_FILE_LOGGER_PATH", None)
-        if self.filepath is None:
-            root_path = os.path.expanduser(os.getenv("VERL_FILE_LOGGER_ROOT", "."))
-            directory = os.path.join(root_path, self.project_name)
-            os.makedirs(directory, exist_ok=True)
-            self.filepath = os.path.join(directory, f"{self.experiment_name}.jsonl")
-        print(f"Creating file logger at {os.path.abspath(self.filepath)}")
-        self.fp = open(self.filepath, "wb", buffering=0)
-
-    def log(self, data, step):
-        data = {"step": step, "data": data}
-        self.fp.write(orjson.dumps(data, option=orjson.OPT_SERIALIZE_NUMPY) + b"\n")
-
-    def finish(self):
-        self.fp.close()
+        self._task.mark_completed()
 
 
 class _TensorboardAdapter:
@@ -320,55 +225,11 @@ class _TensorboardAdapter:
 
 
 class _MlflowLoggingAdapter:
-    def __init__(self):
-        import logging
-        import re
-
-        self.logger = logging.getLogger(__name__)
-        # Suppress noisy "Found credentials from IAM Role" on every MLflow request
-        logging.getLogger("botocore.credentials").setLevel(logging.WARNING)
-        # MLflow metric key validation logic:
-        # https://github.com/mlflow/mlflow/blob/master/mlflow/utils/validation.py#L157C12-L157C44
-        # Only characters allowed: slashes, alphanumerics, underscores, periods, dashes, colons,
-        # and spaces.
-        self._invalid_chars_pattern = re.compile(
-            r"[^/\w.\- :]"
-        )  # Allowed: slashes, alphanumerics, underscores, periods, dashes, colons, and spaces.
-        self._consecutive_slashes_pattern = re.compile(r"/+")
-        self._sanitized_key_cache = {}
-
-    def _sanitize_key(self, key):
-        if key in self._sanitized_key_cache:
-            return self._sanitized_key_cache[key] or key
-        # First replace @ with _at_ for backward compatibility
-        sanitized = key.replace("@", "_at_")
-        # Replace consecutive slashes with a single slash (MLflow treats them as file paths)
-        sanitized = self._consecutive_slashes_pattern.sub("/", sanitized)
-        # Then replace any other invalid characters with _
-        sanitized = self._invalid_chars_pattern.sub("_", sanitized)
-        if sanitized == key:
-            self._sanitized_key_cache[key] = None
-        else:
-            self.logger.warning("[MLflow] Metric key '%s' sanitized to '%s' due to invalid characters.", key, sanitized)
-            self._sanitized_key_cache[key] = sanitized
-        return sanitized
-
     def log(self, data, step):
         import mlflow
 
-        results = {self._sanitize_key(k): v for k, v in data.items()}
-        for _attempt in range(MLFLOW_MAX_ATTEMPTS):
-            try:
-                mlflow.log_metrics(metrics=results, step=step)
-                return
-            except Exception as error:
-                # No sleep between retries — this runs per training step, so we avoid blocking.
-                msg = "mlflow.log_metrics failed (attempt %d/%d): %s"
-                args = (_attempt + 1, MLFLOW_MAX_ATTEMPTS, error)
-                if _attempt < MLFLOW_MAX_ATTEMPTS - 1:
-                    self.logger.info(msg, *args)
-                else:
-                    self.logger.warning(msg, *args)
+        results = {k.replace("@", "_at_"): v for k, v in data.items()}
+        mlflow.log_metrics(metrics=results, step=step)
 
 
 def _compute_mlflow_params_from_objects(params) -> dict[str, Any]:
@@ -462,8 +323,7 @@ class ValidationGenerationsLogger:
         new_table.add_data(*row_data)
 
         # Update reference and log
-        if wandb.run is not None:
-            wandb.log({"val/generations": new_table}, step=step)
+        wandb.log({"val/generations": new_table}, step=step)
         self.validation_table = new_table
 
     def log_generations_to_swanlab(self, samples, step):
@@ -485,6 +345,7 @@ class ValidationGenerationsLogger:
         """Log validation generation to mlflow as artifacts"""
         # https://mlflow.org/docs/latest/api_reference/python_api/mlflow.html?highlight=log_artifact#mlflow.log_artifact
 
+        import json
         import tempfile
 
         import mlflow

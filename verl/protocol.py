@@ -31,21 +31,17 @@ import tensordict
 import torch
 import torch.distributed
 from packaging import version
-from packaging.version import parse as parse_version
 from tensordict import TensorDict
 from torch.utils.data import DataLoader
 
 from verl.utils.device import get_device_id, get_torch_device
-from verl.utils.py_functional import list_of_dict_to_dict_of_list, union_two_dict
+from verl.utils.py_functional import union_two_dict
 from verl.utils.torch_functional import allgather_dict_tensors
-from verl.utils.transferqueue_utils import BatchMeta, KVBatchMeta
 
 __all__ = ["DataProto", "union_tensor_dict"]
 
 with contextlib.suppress(Exception):
     tensordict.set_lazy_legacy(False).set()
-    if parse_version(tensordict.__version__) < parse_version("0.10.0"):
-        tensordict.set_list_to_stack(True).set()
 
 
 class _DataProtoConfigMeta(type):
@@ -185,11 +181,33 @@ def _deep_equal(a: Any, b: Any, visited: set[int]) -> bool:
     return result
 
 
+def _merge_object_array_of_dicts(array1: np.ndarray, array2: np.ndarray) -> np.ndarray:
+    """Merge two object arrays that contain dict-like entries."""
+    assert array1.shape == array2.shape, f"extra_info shapes differ: {array1.shape=} vs {array2.shape=}"
+    merged = np.empty_like(array1)
+    for idx, (info1, info2) in enumerate(zip(array1, array2, strict=False)):
+        dict1 = info1 if isinstance(info1, dict) else {}
+        dict2 = info2 if isinstance(info2, dict) else {}
+        if dict1 is dict2 or not dict2:
+            merged[idx] = dict1
+            continue
+        if not dict1:
+            merged[idx] = dict2
+            continue
+        merged_dict = dict1.copy()
+        merged_dict.update(dict2)
+        merged[idx] = merged_dict
+    return merged
+
+
 def union_numpy_dict(tensor_dict1: dict[str, np.ndarray], tensor_dict2: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     for key, val in tensor_dict2.items():
         if key in tensor_dict1:
             assert isinstance(tensor_dict2[key], np.ndarray)
             assert isinstance(tensor_dict1[key], np.ndarray)
+            if key == "extra_info":
+                tensor_dict1[key] = _merge_object_array_of_dicts(tensor_dict1[key], tensor_dict2[key])
+                continue
             # to properly deal with nan and object type
             assert _deep_equal(tensor_dict1[key], tensor_dict2[key], visited=set()), (
                 f"`{key}` in tensor_dict1 and tensor_dict2 are not the same object."
@@ -197,6 +215,18 @@ def union_numpy_dict(tensor_dict1: dict[str, np.ndarray], tensor_dict2: dict[str
         tensor_dict1[key] = val
 
     return tensor_dict1
+
+
+def list_of_dict_to_dict_of_list(list_of_dict: list[dict]):
+    if len(list_of_dict) == 0:
+        return {}
+    keys = list_of_dict[0].keys()
+    output = {key: [] for key in keys}
+    for data in list_of_dict:
+        for key, item in data.items():
+            assert key in output
+            output[key].append(item)
+    return output
 
 
 def fold_batch_dim(data: "DataProto", new_batch_size):
@@ -236,61 +266,6 @@ def unfold_batch_dim(data: "DataProto", batch_dims=2):
         non_tensor_new[key] = np.reshape(val, newshape=(batch_size, *val.shape[batch_dims:]))
 
     return type(data)(batch=tensor, non_tensor_batch=non_tensor_new, meta_info=data.meta_info)
-
-
-def serialize_single_tensor(obj: torch.Tensor) -> tuple[str, tuple[int, ...], int | memoryview]:
-    data = obj.flatten().contiguous().view(torch.uint8).numpy()
-    dtype = str(obj.dtype).removeprefix("torch.")
-    return dtype, obj.shape, data
-
-
-def serialize_tensordict(batch: TensorDict) -> tuple[tuple[int, ...], Optional[str], dict[str, tuple[str, Any]]]:
-    encoded_items: dict[str, tuple[Any]] = {}
-    for k, v in batch.items():
-        if not v.is_nested:
-            encoded_items[k] = serialize_single_tensor(v)
-        else:
-            layout = str(v.layout).removeprefix("torch.")
-            data = [serialize_single_tensor(tensor) for tensor in v.unbind()]
-            encoded_items[k] = (layout, data)
-
-    batch_size = tuple(batch.batch_size)
-    device = str(batch.device) if batch.device is not None else None
-    return batch_size, device, encoded_items
-
-
-def deserialize_single_tensor(arr: Any) -> torch.Tensor:
-    dtype, shape, data = arr
-
-    torch_dtype = getattr(torch, dtype)
-    assert isinstance(torch_dtype, torch.dtype)
-
-    buffer = bytearray(data)
-    # Create uint8 array
-    arr = torch.frombuffer(buffer, dtype=torch.uint8)
-    # Convert back to proper shape & type
-    return arr.view(torch_dtype).view(shape)
-
-
-def deserialize_tensordict(arr: Any) -> TensorDict:
-    batch_size, device, encoded_items = arr
-    decoded_items: dict[str, Any] = {}
-
-    for k, v in encoded_items.items():
-        if len(v) == 3:
-            # decode single tensor
-            decoded_items[k] = deserialize_single_tensor(v)
-        elif len(v) == 2:
-            # decode nested tensor
-            layout, data = v
-            torch_layout = getattr(torch, layout)
-            decoded_items[k] = torch.nested.as_nested_tensor(
-                [deserialize_single_tensor(tensor) for tensor in data], layout=torch_layout
-            )
-        else:
-            raise ValueError(f"Invalid tensor encoding format, expected length 2 or 3, got {len(v)}")
-
-    return TensorDict(source=decoded_items, batch_size=batch_size, device=device)
 
 
 def collate_fn(x: list["DataProtoItem"]):
@@ -375,51 +350,28 @@ class DataProto:
             raise TypeError(f"Indexing with {type(item)} is not supported")
 
     def __getstate__(self):
+        import io
+
+        buffer = io.BytesIO()
         if version.parse(tensordict.__version__) >= version.parse("0.5.0") and self.batch is not None:
-            # Check if batch is empty to avoid torch.cat error in consolidate
-            if len(self.batch.keys()) > 0:
-                batch = self.batch.contiguous().consolidate()
-            else:
-                batch = self.batch
+            batch_to_save = self.batch.contiguous().consolidate()
         else:
-            batch = self.batch
-
-        if os.getenv("VERL_DATAPROTO_SERIALIZATION_METHOD") == "numpy":
-            if batch is not None:
-                batch = serialize_tensordict(self.batch)
-
-            return (
-                batch,
-                self.non_tensor_batch,
-                self.meta_info,
-            )
-        else:
-            import io
-
-            buffer = io.BytesIO()
-            torch.save(batch, buffer)
-            buffer_bytes = buffer.getvalue()
-            return buffer_bytes, self.non_tensor_batch, self.meta_info
+            batch_to_save = self.batch
+        torch.save(batch_to_save, buffer)
+        buffer_bytes = buffer.getvalue()
+        return buffer_bytes, self.non_tensor_batch, self.meta_info
 
     def __setstate__(self, data):
+        import io
+
         batch_deserialized_bytes, non_tensor_batch, meta_info = data
-
-        if os.getenv("VERL_DATAPROTO_SERIALIZATION_METHOD") == "numpy":
-            if batch_deserialized_bytes is not None:
-                self.batch = deserialize_tensordict(batch_deserialized_bytes)
-            else:
-                self.batch = None
-        else:
-            import io
-
-            batch_deserialized = io.BytesIO(initial_bytes=batch_deserialized_bytes)
-            batch = torch.load(
-                batch_deserialized,
-                weights_only=False,
-                map_location="cpu" if not get_torch_device().is_available() else None,
-            )
-            self.batch = batch
-
+        batch_deserialized = io.BytesIO(initial_bytes=batch_deserialized_bytes)
+        batch = torch.load(
+            batch_deserialized,
+            weights_only=False,
+            map_location="cpu" if not get_torch_device().is_available() else None,
+        )
+        self.batch = batch
         self.non_tensor_batch = non_tensor_batch
         self.meta_info = meta_info
 
@@ -541,47 +493,6 @@ class DataProto:
         if auto_padding:
             meta_info[DataProtoConfig.auto_padding_key] = True
         return cls(batch=tensor_dict, non_tensor_batch=non_tensors, meta_info=meta_info)
-
-    @classmethod
-    def from_tensordict(
-        cls,
-        tensor_dict: TensorDict = None,
-        meta_info=None,
-        num_batch_dims=1,
-    ):
-        """Create a DataProto from a TensorDict. This assumes that
-        1. All the tensor in tensor_dict have the same dim0
-        2. Only dim0 is the batch dim
-        """
-        assert version.parse(tensordict.__version__) >= version.parse("0.10.0"), (
-            "Build DataProto from TensorDict at least requires tensordict version 0.10.0"
-        )
-        from tensordict import NonTensorData, NonTensorStack
-
-        assert num_batch_dims > 0, "num_batch_dims must be greater than zero"
-        if not all(isinstance(val, torch.Tensor) for val in tensor_dict.values()):
-            assert num_batch_dims == 1, "only support num_batch_dims=1 when tensor_dict contains non tensor data."
-
-        if meta_info is None:
-            meta_info = {}
-        batch = {}
-        non_tensor_batch = {}
-        batch_size = None
-        for key, val in tensor_dict.items():
-            if isinstance(val, torch.Tensor):
-                batch[key] = val
-                if batch_size is None:
-                    batch_size = val.shape[:num_batch_dims]
-            elif isinstance(val, NonTensorStack):
-                non_tensor_batch[key] = np.array([elem.data for elem in val], dtype=object)
-            elif isinstance(val, NonTensorData):
-                meta_info[key] = val.data
-
-        return cls(
-            batch=TensorDict(batch, batch_size=batch_size),
-            non_tensor_batch=non_tensor_batch,
-            meta_info=meta_info,
-        )
 
     def to(self, device) -> "DataProto":
         """move the batch to device
@@ -799,7 +710,7 @@ class DataProto:
 
     def make_iterator(self, mini_batch_size, epochs, seed=None, dataloader_kwargs=None):
         r"""Make an iterator from the DataProto. This is built upon that TensorDict can be used as a normal Pytorch
-        dataset. See https://pytorch.org/tensordict/stable/tutorials/data_fashion for more details.
+        dataset. See https://pytorch.org/tensordict/tutorials/data_fashion for more details.
 
 
         Args:
@@ -916,7 +827,7 @@ class DataProto:
     @staticmethod
     def concat(data: list["DataProto"]) -> "DataProto":
         """Concat a list of DataProto. The batch is concatenated among dim=0.
-        The meta_info is merged, with special handling for metrics from different workers.
+        The meta_info is assumed to be identical and will use the first one.
 
         Args:
             data (List[DataProto]): list of DataProto
@@ -933,32 +844,8 @@ class DataProto:
         for key, val in non_tensor_batch.items():
             non_tensor_batch[key] = np.concatenate(val, axis=0)
 
-        # Merge meta_info with special handling for metrics
-        merged_meta_info = {}
-        if data:
-            # Merge non-metric meta_info and aggregate metrics from all workers.
-            all_metrics = []
-            for d in data:
-                for k, v in d.meta_info.items():
-                    if k == "metrics":
-                        if v is not None:
-                            if isinstance(v, list):
-                                all_metrics.extend(v)
-                            else:
-                                all_metrics.append(v)
-                    else:
-                        if k in merged_meta_info:
-                            # Ensure consistency for overlapping non-metric keys
-                            assert merged_meta_info[k] == v, f"Conflicting values for meta_info key '{k}'"
-                        else:
-                            merged_meta_info[k] = v
-
-            # Flatten list of dicts to dict of lists for consistent metrics structure
-            if all_metrics:
-                merged_meta_info["metrics"] = list_of_dict_to_dict_of_list(all_metrics)
-
         cls = type(data[0]) if len(data) > 0 else DataProto
-        return cls(batch=new_batch, non_tensor_batch=non_tensor_batch, meta_info=merged_meta_info)
+        return cls(batch=new_batch, non_tensor_batch=non_tensor_batch, meta_info=data[0].meta_info)
 
     def reorder(self, indices):
         """
@@ -1099,32 +986,6 @@ class DataProto:
             meta_info=self.meta_info,
         )
 
-    def to_tensordict(self) -> TensorDict:
-        """Convert this DataProto to TensorDict. Note that this requires tensordict version at least 0.10
-
-        Returns:
-
-        """
-        assert parse_version(tensordict.__version__) >= parse_version("0.10"), (
-            "Convert DataProto to TensorDict at least requires tensordict version 0.10"
-        )
-        tensor_batch = self.batch.to_dict()
-        non_tensor_batch = self.non_tensor_batch
-
-        from tensordict.tensorclass import NonTensorData, NonTensorStack
-
-        from verl.utils import tensordict_utils as tu
-
-        common_keys = set(tensor_batch.keys()) & set(non_tensor_batch.keys())
-        assert len(common_keys) == 0, f"tensor_batch and non_tensor_batch have common keys {common_keys}"
-
-        for key, val in non_tensor_batch.items():
-            assert isinstance(val, np.ndarray)
-            # Convert to NonTensorStack instead of plain list to handle nested structures
-            tensor_batch[key] = NonTensorStack.from_list([NonTensorData(item) for item in val])
-        output = tu.get_tensordict(tensor_dict=tensor_batch, non_tensor_dict=self.meta_info)
-        return output
-
     def get_data_info(self) -> str:
         """Return formatted information about stored data with nested type details.
 
@@ -1212,115 +1073,11 @@ class DataProtoFuture:
     def get(self):
         output = ray.get(self.futures)  # dp_size.
         for o in output:
-            assert isinstance(o, DataProto | TensorDict)
-
-        if isinstance(output[0], DataProto):
-            output = DataProto.concat(output)  # select dp, concat
-        elif isinstance(output[0], TensorDict):
-            from verl.utils.tensordict_utils import concat_tensordict
-
-            output = concat_tensordict(output)
-        else:
-            raise TypeError(f"Unknown type {type(o[0])} in DataProtoFuture")
-
+            assert isinstance(o, DataProto)
+        output = self.collect_fn(output)  # select dp, concat
         if self.dispatch_fn is not None:
             output = self.dispatch_fn(output)  # split in batch dim, select using dp
         return output
-
-
-class BatchData:
-    """Uniform dispatch wrapper for batch data operations.
-
-    All type-specific logic (isinstance checks) is centralized here so that
-    callers (e.g. decorator.py) never need to branch on the concrete data type.
-
-    Usage::
-
-        # chunk a single data item into N pieces
-        chunks = BatchData(arg).chunk(chunks=N)
-
-        # concat a list of data items into one
-        merged = BatchData(output_list).concat()
-
-        # validate before dispatching
-        assert BatchData(arg).is_chunkable()
-        assert BatchData(output_list).is_concatable()
-    """
-
-    _CHUNKABLE_TYPES = (TensorDict, KVBatchMeta, BatchMeta)  # lazily extended with DataProto etc.
-    _CONCATABLE_TYPES = (TensorDict, KVBatchMeta, BatchMeta)
-
-    def __init__(self, data):
-        self._data = data
-
-    # ---- validation ----------------------------------------------------------
-
-    def is_chunkable(self) -> bool:
-        """Return True if the wrapped data supports chunk dispatch."""
-        return isinstance(self._data, self._chunkable_types())
-
-    def is_concatable(self) -> bool:
-        """Return True if the wrapped list of data supports concat collect."""
-        data = self._data
-        if not isinstance(data, list | tuple) or len(data) == 0:
-            return False
-        return isinstance(data[0], self._concatable_types())
-
-    # ---- operations ----------------------------------------------------------
-
-    def chunk(self, chunks: int):
-        """Split the wrapped data into *chunks* pieces along the batch dim.
-
-        Returns a tuple/list of the **original data types** (not BatchData).
-        """
-        data = self._data
-        if isinstance(data, TensorDict):
-            from verl.utils.tensordict_utils import chunk_tensordict, contiguous
-
-            raw_chunks = chunk_tensordict(data, chunks)
-            return tuple(contiguous(val).consolidate() for val in raw_chunks)
-        if isinstance(data, KVBatchMeta):
-            # early translate KVBatchMeta -> BatchMeta to prevent frequent
-            # controller communication during PUT/GET in each rank
-            from verl.utils.transferqueue_utils import kv_batch_meta2batch_meta
-
-            data = kv_batch_meta2batch_meta(data)
-        # DataProto, DataProtoFuture, etc. all expose .chunk()
-        return data.chunk(chunks=chunks)
-
-    def concat(self):
-        """Concat the wrapped list of data items into a single result.
-
-        Returns the **original data type** (not BatchData).
-        """
-        data = self._data
-        if not data:
-            raise ValueError("Cannot concatenate an empty list of data items.")
-        sample = data[0]
-        if isinstance(sample, ray.ObjectRef):
-            return DataProtoFuture.concat(data)
-        if isinstance(sample, TensorDict):
-            from verl.utils.tensordict_utils import concat_tensordict
-
-            return concat_tensordict(data)
-        if isinstance(sample, BatchMeta):
-            # translate BatchMeta -> KVBatchMeta
-            batch_meta = BatchMeta.concat(data)
-            from verl.utils.transferqueue_utils import batch_meta2kv_batch_meta
-
-            return batch_meta2kv_batch_meta(batch_meta)
-        # DataProto, etc. expose .concat() as classmethod / staticmethod
-        return type(sample).concat(data)
-
-    # ---- helpers (lazy type tuples to avoid import-order issues) -------------
-
-    @classmethod
-    def _chunkable_types(cls):
-        return (DataProto, DataProtoFuture, TensorDict, KVBatchMeta, BatchMeta)
-
-    @classmethod
-    def _concatable_types(cls):
-        return (DataProto, ray.ObjectRef, TensorDict, KVBatchMeta, BatchMeta)
 
 
 def all_gather_data_proto(data: DataProto, process_group):

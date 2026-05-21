@@ -16,13 +16,6 @@ from typing import Optional
 
 import torch
 
-try:
-    from flash_attn.ops.triton.cross_entropy import cross_entropy_loss
-
-    _FLASH_ATTN_CROSS_ENTROPY_AVAILABLE = True
-except ImportError:
-    _FLASH_ATTN_CROSS_ENTROPY_AVAILABLE = False
-
 
 def _fused_linear_for_ppo_fwd(
     hidden_states: torch.FloatTensor,
@@ -34,19 +27,14 @@ def _fused_linear_for_ppo_fwd(
     orig_dtype = logits.dtype
     logits = logits.to(torch.float32)
 
+    # Slower but more numerically stable to do log_softmax than probs.log()
     probs = logits.softmax(dim=-1)
+    log_probs = logits.log_softmax(dim=-1)
+
+    token_log_probs = log_probs.gather(-1, input_ids.unsqueeze(-1)).squeeze(-1)
     entropy = torch.logsumexp(logits, dim=-1) - torch.sum(probs * logits, dim=-1)
 
-    if _FLASH_ATTN_CROSS_ENTROPY_AVAILABLE:
-        per_token_entropy_loss = cross_entropy_loss(logits, input_ids)[0]
-        token_log_probs = -per_token_entropy_loss
-    else:
-        # Fallback to original PyTorch implementation
-        log_probs = logits.log_softmax(dim=-1)
-        token_log_probs = log_probs.gather(-1, input_ids.unsqueeze(-1)).squeeze(-1)
-
-    assert token_log_probs.dtype == torch.float32
-    return token_log_probs, entropy.to(orig_dtype)
+    return token_log_probs.to(orig_dtype), entropy.to(orig_dtype)
 
 
 def _fused_linear_for_ppo_bwd(
@@ -111,8 +99,7 @@ class FusedLinearForPPOFunction(torch.autograd.Function):
 
         # Allocate memory for outputs
         output_requires_grad = hidden_states.requires_grad or vocab_weights.requires_grad
-        # Logits are upcasted to fp32 before computing log_probs, which are also fp32
-        log_probs = torch.zeros(T, device=hidden_states.device, dtype=torch.float32, requires_grad=output_requires_grad)
+        log_probs = hidden_states.new_zeros(T, requires_grad=output_requires_grad)
         entropy = hidden_states.new_zeros(T, requires_grad=output_requires_grad)
 
         # Perform forward one chunk at a time

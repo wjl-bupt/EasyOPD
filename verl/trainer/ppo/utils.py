@@ -18,7 +18,6 @@ from enum import Enum
 from omegaconf import DictConfig
 
 from verl.single_controller.base import Worker
-from verl.trainer.distillation import is_distillation_enabled
 from verl.trainer.ppo.core_algos import AdvantageEstimator
 
 WorkerType = type[Worker]
@@ -36,61 +35,20 @@ class Role(Enum):
     RefPolicy = 4
     RewardModel = 5
     ActorRolloutRef = 6
-    Env = 7
-    TeacherModel = 8
-
-    def __str__(self):
-        return self._get_role_string()
-
-    def _get_role_string(self):
-        role_mapping = {
-            Role.Actor: "actor",
-            Role.Rollout: "rollout",
-            Role.ActorRollout: "actor_rollout",
-            Role.Critic: "critic",
-            Role.RefPolicy: "ref",
-            Role.RewardModel: "rm",
-            Role.ActorRolloutRef: "actor_rollout_ref",
-            Role.TeacherModel: "teacher",
-        }
-        return role_mapping.get(self, self.name.lower())
-
-    @classmethod
-    def from_string(cls, name: str):
-        string_mapping = {
-            "actor": cls.Actor,
-            "rollout": cls.Rollout,
-            "actor_rollout": cls.ActorRollout,
-            "critic": cls.Critic,
-            "ref": cls.RefPolicy,
-            "rm": cls.RewardModel,
-            "actor_rollout_ref": cls.ActorRolloutRef,
-        }
-        role = string_mapping.get(name.lower())
-        if role is None:
-            raise ValueError(f"No Role found for string: {name}")
-        return role
 
 
 def need_reference_policy(
-    config: DictConfig,
+    role_worker_mapping: dict[Role, WorkerType],
 ) -> bool:
-    """Given the config, do we need ref policy."""
-    return config.algorithm.get("use_kl_in_reward", False) or config.actor_rollout_ref.actor.use_kl_loss
-
-
-def need_teacher_policy(
-    config: DictConfig,
-) -> bool:
-    """Given the config, do we need distillation policy."""
-    return is_distillation_enabled(config.get("distillation"))
+    """Given a role worker mapping, do we need ref policy."""
+    return Role.RefPolicy in role_worker_mapping
 
 
 def need_reward_model(
-    config: DictConfig,
+    role_worker_mapping: dict[Role, WorkerType],
 ) -> bool:
-    """Given the config, do we need reward model."""
-    return config.reward.reward_model.enable
+    """Given a role worker mapping, do we need reward model."""
+    return Role.RewardModel in role_worker_mapping
 
 
 def need_critic(config: DictConfig) -> bool:

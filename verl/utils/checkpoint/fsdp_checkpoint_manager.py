@@ -32,7 +32,6 @@ from verl.utils.device import is_cuda_available
 from verl.utils.fs import copy_to_local, is_non_local, local_mkdir_safe
 from verl.utils.fsdp_utils import fsdp_version, get_fsdp_full_state_dict, get_fsdp_state_ctx
 from verl.utils.logger import log_with_rank
-from verl.utils.transformers_compat import drop_tied_target_keys, get_auto_model_for_vision2seq
 
 from .checkpoint_manager import BaseCheckpointManager
 
@@ -71,7 +70,6 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         checkpoint_contents DictConfig: Configuration for checkpoint contents.
             - 'load': Components to load; must contain 'model'. Defaults to ['model', 'optimizer', 'extra'].
             - 'save': Components to save; must contain 'model'. Defaults to ['model', 'optimizer', 'extra'].
-        trust_remote_code: Whether to trust_remote_code when loading the model configuration
     """
 
     def __init__(
@@ -81,10 +79,10 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         lr_scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = None,
         processing_class: PreTrainedTokenizer | ProcessorMixin = None,
         checkpoint_config: DictConfig = None,
-        trust_remote_code: bool = False,
         **kwargs,
     ):
-        if processing_class is None and "tokenizer" in kwargs:
+        if processing_class is None:
+            assert "tokenizer" in kwargs, "tokenizer or processor must be provided"
             warnings.warn(
                 "`tokenizer` is deprecated. use `processing_class` instead.", DeprecationWarning, stacklevel=2
             )
@@ -97,7 +95,6 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             processing_class=processing_class,
             checkpoint_config=checkpoint_config,
         )
-        self.trust_remote_code = trust_remote_code
 
     def load_checkpoint(self, local_path: str, hdfs_path: str = None, del_local_after_load=False):
         """
@@ -205,8 +202,17 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         # record the previous global step
         self.previous_global_step = global_step
 
-        if self.rank == 0:
-            self.ensure_checkpoint_capacity(max_ckpt_to_keep)
+        # remove previous local_path, only rank 0 should do this
+        if (
+            self.rank == 0
+            and max_ckpt_to_keep
+            and isinstance(max_ckpt_to_keep, int)
+            and max_ckpt_to_keep > 0
+            and len(self.previous_saved_paths) >= max_ckpt_to_keep
+        ):
+            keep_start = len(self.previous_saved_paths) - max_ckpt_to_keep + 1
+            self.remove_previous_save_local_path(self.previous_saved_paths[:keep_start])
+            self.previous_saved_paths = self.previous_saved_paths[keep_start:]
 
         local_path = local_mkdir_safe(local_path)
         torch.distributed.barrier()
@@ -271,12 +277,8 @@ class FSDPCheckpointManager(BaseCheckpointManager):
                     # if the generation config isn't available, we don't save it
                     pass
 
-            if hasattr(model_config, "auto_map") and None in model_config.auto_map:
-                model_config.auto_map = {k: v for k, v in model_config.auto_map.items() if k is not None}
-
             model_config.save_pretrained(hf_config_tokenizer_path)
-            if self.processing_class is not None:
-                self.processing_class.save_pretrained(hf_config_tokenizer_path)
+            self.processing_class.save_pretrained(hf_config_tokenizer_path)
             log_with_rank(
                 f"Saved model config and tokenizer class to {os.path.abspath(hf_config_tokenizer_path)}",
                 rank=self.rank,
@@ -319,15 +321,25 @@ class FSDPCheckpointManager(BaseCheckpointManager):
 
                     auto_model_cls = AutoModelForCausalLM
                 elif "ForConditionalGeneration" in model_config.architectures[0]:
-                    auto_model_cls = get_auto_model_for_vision2seq()
+                    # Handle different transformers versions for Vision2Seq models
+                    import transformers
+                    from packaging import version
+
+                    if version.parse(transformers.__version__) >= version.parse("4.54.0"):
+                        # transformers >= 4.54.0 uses AutoModelForImageTextToText
+                        from transformers import AutoModelForImageTextToText
+
+                        auto_model_cls = AutoModelForImageTextToText
+                    else:
+                        # transformers < 4.54.0 uses AutoModelForVision2Seq
+                        from transformers import AutoModelForVision2Seq
+
+                        auto_model_cls = AutoModelForVision2Seq
                 else:
                     raise NotImplementedError(f"Unknown architecture {model_config['architectures']}")
 
                 with init_empty_weights():
-                    save_model = auto_model_cls.from_config(
-                        model_config, torch_dtype=torch.bfloat16, trust_remote_code=self.trust_remote_code
-                    )
-
+                    save_model = auto_model_cls.from_config(model_config, torch_dtype=torch.bfloat16)
                 save_model.to_empty(device="cpu")
 
                 if save_model.can_generate():
@@ -338,8 +350,6 @@ class FSDPCheckpointManager(BaseCheckpointManager):
                             f"Warning: {self.__class__.__name__}.save_checkpoint: Generation config file not found "
                             f"in, using a generation config created from the model config when saving hf_model."
                         )
-
-                drop_tied_target_keys(state_dict, save_model, model_config)
 
                 save_model.save_pretrained(hf_local_path, state_dict=state_dict)
                 log_with_rank(
@@ -354,5 +364,4 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             # wait for rank0 to dump hf_model to local
             torch.distributed.barrier()
 
-        if self.rank == 0:
-            self.register_checkpoint(local_path, max_ckpt_to_keep)
+        self.previous_saved_paths.append(local_path)

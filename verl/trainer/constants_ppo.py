@@ -17,14 +17,6 @@ import os
 
 from ray._private.runtime_env.constants import RAY_JOB_CONFIG_JSON_ENV_VAR
 
-from verl.utils.device import get_device_capability
-
-_major, _ = get_device_capability()
-# WAR: GB200 nodes without IMEX channel support raise ncclUnhandledCudaError 801 during
-# Megatron all_gather (mbridge export_weights) when NCCL tries to use NVLS/MNNVL.
-# Disable both on Blackwell (SM 10.x); non-Blackwell GPUs don't have MNNVL.
-_gb200_nccl_env = {"NCCL_NVLS_ENABLE": "0", "NCCL_MNNVL_ENABLE": "0"} if (_major or 0) >= 10 else {}
-
 PPO_RAY_RUNTIME_ENV = {
     "env_vars": {
         "TOKENIZERS_PARALLELISM": "true",
@@ -32,15 +24,6 @@ PPO_RAY_RUNTIME_ENV = {
         "VLLM_LOGGING_LEVEL": "WARN",
         "VLLM_ALLOW_RUNTIME_LORA_UPDATING": "true",
         "CUDA_DEVICE_MAX_CONNECTIONS": "1",
-        # TODO: disable compile cache due to cache corruption issue
-        # https://github.com/vllm-project/vllm/issues/31199
-        "VLLM_DISABLE_COMPILE_CACHE": "1",
-        # Needed for multi-processes colocated on same NPU device
-        # https://www.hiascend.com/document/detail/zh/canncommercial/83RC1/maintenref/envvar/envref_07_0143.html
-        "HCCL_HOST_SOCKET_PORT_RANGE": "auto",
-        "HCCL_NPU_SOCKET_PORT_RANGE": "auto",
-        "HSA_NO_SCRATCH_RECLAIM": "1",
-        **_gb200_nccl_env,
     },
 }
 
