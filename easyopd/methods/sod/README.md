@@ -160,8 +160,7 @@ bash examples/sod/run_sod.sh
 
 ### 4. Hardware Requirements
 
-- **Minimum:** 8× A100 80GB GPUs (1 node)
-- **Recommended:** 8× H100 80GB GPUs
+- **Training Resources:** 8× NVIDIA H20 96GB GPUs, batch size 64
 - The script uses `infer_tp=4` (4-way tensor parallelism for vLLM rollout) and `train_sp=4` (4-way sequence parallelism for training)
 
 ### 5. Monitoring
