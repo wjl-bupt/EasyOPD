@@ -4,7 +4,9 @@ Drop-in replacement for the body of `DataParallelPPOCritic.update_critic`
 when `gad.enable=true`. The body runs the critic forward twice per
 micro-batch (once on student, once on teacher), computes the Bradley-
 Terry pairwise loss, accumulates gradients, takes an optimizer step,
-and returns a DataProto carrying per-step metrics.
+and returns a flat dict of per-step metrics (matching verl's own
+`update_critic` return contract, which the CriticWorker mutates with
+`metrics["perf/mfu/critic"] = ...`).
 
 Validation: on every call we run `validate_gad_batch` against the
 data's batch keys. This is cheap (a dict membership check) and the
@@ -43,14 +45,13 @@ def update_critic_step(worker: Any, data: Any):
         data: a DataProto whose `.batch` includes both student and teacher tensors.
 
     Returns:
-        A DataProto with `meta_info["metrics"]` containing
-        `critic/d_loss`, `critic/d_acc`, `critic/student_value_mean`,
-        `critic/teacher_value_mean`, `critic/grad_norm`.
+        A flat ``dict[str, float]`` of metrics with keys
+        ``critic/d_loss``, ``critic/d_acc``, ``critic/student_value_mean``,
+        ``critic/teacher_value_mean``, ``critic/grad_norm``. The caller
+        (verl's ``CriticWorker``) mutates this dict to attach
+        ``perf/mfu/critic`` before wrapping it into a DataProto.
     """
     validate_gad_batch(data.batch)
-
-    # Import lazily so the GAD package stays importable without verl.
-    from verl.protocol import DataProto  # noqa: WPS433
 
     worker.critic_module.train()
     worker.critic_optimizer.zero_grad()
@@ -111,5 +112,4 @@ def update_critic_step(worker: Any, data: Any):
     grad_norm = worker._optimizer_step()
     _append(metrics, **{"critic/grad_norm": float(grad_norm) if not hasattr(grad_norm, "item") else grad_norm.item()})
 
-    out = DataProto(batch=data.batch, meta_info={"metrics": _reduce(metrics)})
-    return out
+    return _reduce(metrics)

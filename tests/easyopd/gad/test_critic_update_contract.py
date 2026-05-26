@@ -4,7 +4,8 @@ We do not test numerical equivalence to the verl PPO critic update.
 We test that the function:
   (a) runs student and teacher forwards via the injected critic worker,
   (b) calls loss.backward and an optimizer step,
-  (c) returns a DataProto-like result with metrics containing the expected keys.
+  (c) returns a flat dict of metrics containing the expected keys
+      (matching verl's own update_critic return contract).
 """
 
 from __future__ import annotations
@@ -33,9 +34,6 @@ class _FakeDataProto:
     def split(self, micro_batch_size: int):
         # Single split for the contract test.
         return [self]
-
-    def to(self, device):
-        return self
 
 
 def _make_worker(monkeypatch):
@@ -102,9 +100,8 @@ def test_update_step_returns_required_metrics(monkeypatch):
     from easyopd.methods.gad.critic_update import update_critic_step
 
     worker, optimizer = _make_worker(monkeypatch)
-    out = update_critic_step(worker, _make_data())
+    metrics = update_critic_step(worker, _make_data())
 
-    metrics = out.meta_info["metrics"]
     for key in (
         "critic/d_loss",
         "critic/d_acc",
@@ -113,6 +110,7 @@ def test_update_step_returns_required_metrics(monkeypatch):
         "critic/grad_norm",
     ):
         assert key in metrics, f"missing metric {key} in {metrics}"
+    assert isinstance(metrics, dict), f"expected dict return, got {type(metrics)}"
 
 
 def test_update_step_validates_data_contract(monkeypatch):
@@ -124,15 +122,3 @@ def test_update_step_validates_data_contract(monkeypatch):
     del bad.batch["teacher_input_ids"]
     with pytest.raises(GADBatchContractError):
         update_critic_step(worker, bad)
-
-
-@pytest.fixture(autouse=True)
-def _stub_dataproto(monkeypatch):
-    """Replace verl.protocol.DataProto with _FakeDataProto for the contract test."""
-    import sys
-    import types
-
-    fake_module = types.ModuleType("verl.protocol")
-    fake_module.DataProto = _FakeDataProto  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "verl.protocol", fake_module)
-    yield

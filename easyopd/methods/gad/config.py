@@ -27,7 +27,7 @@ def _select(node: Any, key: str, default: Any = None) -> Any:
         return default
     try:
         value = OmegaConf.select(node, key)
-    except Exception:
+    except TypeError:
         return default
     return default if value is None else value
 

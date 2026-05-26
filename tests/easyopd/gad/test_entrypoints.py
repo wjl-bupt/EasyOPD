@@ -1,6 +1,5 @@
 """Existence + shape smoke tests for examples/gad_trainer/."""
 
-import os
 import stat
 from pathlib import Path
 
