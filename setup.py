@@ -97,6 +97,10 @@ setup(
             "trainer/config/*/*.yaml",
             "experimental/*/config/*.yaml",
         ],
+        "easyopd": [
+            "methods/ropd/prompts/*.txt",
+            "config/ropd/*.yaml",
+        ],
     },
     include_package_data=True,
     long_description=long_description,
