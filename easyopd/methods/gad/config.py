@@ -17,6 +17,21 @@ class GADConfigError(ValueError):
     """Raised when GAD is enabled but the surrounding config is invalid."""
 
 
+def _select(node: Any, key: str, default: Any = None) -> Any:
+    """OmegaConf.select with a default that works on omegaconf 2.0 and newer.
+
+    The `default=` kwarg was added in 2.1; passing it explicitly to 2.0
+    raises TypeError. We replicate the behavior locally.
+    """
+    if node is None:
+        return default
+    try:
+        value = OmegaConf.select(node, key)
+    except Exception:
+        return default
+    return default if value is None else value
+
+
 def is_gad_enabled(cfg: Any) -> bool:
     """Return True iff cfg.gad.enable is truthy.
 
@@ -25,10 +40,10 @@ def is_gad_enabled(cfg: Any) -> bool:
     """
     if cfg is None:
         return False
-    gad_node = OmegaConf.select(cfg, "gad", default=None) if isinstance(cfg, DictConfig) else getattr(cfg, "gad", None)
+    gad_node = _select(cfg, "gad", default=None) if isinstance(cfg, DictConfig) else getattr(cfg, "gad", None)
     if gad_node is None:
         return False
-    enable = OmegaConf.select(gad_node, "enable", default=False) if isinstance(gad_node, DictConfig) else getattr(gad_node, "enable", False)
+    enable = _select(gad_node, "enable", default=False) if isinstance(gad_node, DictConfig) else getattr(gad_node, "enable", False)
     return bool(enable)
 
 
@@ -45,10 +60,10 @@ class GADConfig:
         Validation collects ALL violations and raises a single GADConfigError
         with a multi-line message, so the user can fix everything in one pass.
         """
-        gad_node = OmegaConf.select(cfg, "gad", default=None) if isinstance(cfg, DictConfig) else getattr(cfg, "gad", None)
-        enable = bool(OmegaConf.select(gad_node, "enable", default=False)) if gad_node is not None else False
-        path = OmegaConf.select(gad_node, "discriminator_init_path", default=None) if gad_node is not None else None
-        prefix = OmegaConf.select(gad_node, "metrics_prefix", default="gad") if gad_node is not None else "gad"
+        gad_node = _select(cfg, "gad", default=None) if isinstance(cfg, DictConfig) else getattr(cfg, "gad", None)
+        enable = bool(_select(gad_node, "enable", default=False)) if gad_node is not None else False
+        path = _select(gad_node, "discriminator_init_path", default=None) if gad_node is not None else None
+        prefix = _select(gad_node, "metrics_prefix", default="gad") if gad_node is not None else "gad"
 
         if not enable:
             return cls(enable=False, discriminator_init_path=None, metrics_prefix=prefix or "gad")
@@ -61,7 +76,7 @@ class GADConfig:
                 f"(got {path!r})"
             )
 
-        rm_enable = OmegaConf.select(cfg, "reward_model.enable", default=False)
+        rm_enable = _select(cfg, "reward_model.enable", default=False)
         if bool(rm_enable):
             problems.append(
                 "gad.enable=true is incompatible with reward_model.enable=true "
