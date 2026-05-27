@@ -425,6 +425,44 @@ class RayPPOTrainer:
         # if ref_in_actor is True, the reference policy will be actor without lora applied
         self.ref_in_actor = config.actor_rollout_ref.model.get("lora_rank", 0) > 0
 
+        # ============ [EasyOPD:G-OPD] Context distillation and base model configuration ============
+        # Context distillation (critique-based)
+        self.critique_vllm_url = config.algorithm.get("critique_vllm_url", None)
+        self.use_context_distillation = self.critique_vllm_url is not None
+        self.critique_model = config.algorithm.get("critique_model", None)
+        self.max_critique_tokens = config.algorithm.get("max_critique_tokens", 2048)
+        self.critique_temperature = config.algorithm.get("critique_temperature", 0.0)
+        self.critique_top_p = config.algorithm.get("critique_top_p", 1.0)
+
+        # Ref solution distillation
+        self.use_ref_solution_distillation = config.algorithm.get("use_ref_solution_distillation", False)
+
+        if self.use_context_distillation or self.use_ref_solution_distillation:
+            return_raw_chat = config.data.get("return_raw_chat", False)
+            if not return_raw_chat:
+                raise ValueError(
+                    "When using context distillation (critique_vllm_url is provided) "
+                    "or ref solution distillation (use_ref_solution_distillation=True), "
+                    "you must set data.return_raw_chat=True in config."
+                )
+
+        # Base model paths for G-OPD corrected reward computation
+        self.base_model_path = config.actor_rollout_ref.model.get("base_model_path", None)
+        self.ref_base_model_path = config.actor_rollout_ref.ref.get("model", None)
+        if self.ref_base_model_path is not None:
+            self.ref_base_model_path = self.ref_base_model_path.get("base_model_path", None)
+        self.use_base_models = self.base_model_path is not None and self.ref_base_model_path is not None
+
+        if self.use_base_models:
+            print(f"[EasyOPD:G-OPD] Corrected reward enabled with base models:")
+            print(f"  Actor base model: {self.base_model_path}")
+            print(f"  Ref base model: {self.ref_base_model_path}")
+        if self.use_context_distillation:
+            print(f"[EasyOPD:G-OPD] Context distillation enabled with vLLM URL: {self.critique_vllm_url}")
+        if self.use_ref_solution_distillation:
+            print("[EasyOPD:G-OPD] Ref solution distillation enabled")
+        # ============ [EasyOPD:G-OPD] End ============
+
         # define in-reward KL control
         # kl loss control currently not suppoorted
         if self.config.algorithm.use_kl_in_reward:
@@ -1396,11 +1434,74 @@ class RayPPOTrainer:
                     if self.use_reference_policy:
                         # compute reference log_prob
                         with marked_timer("ref", timing_raw, color="olive"):
+                            # ============ [EasyOPD:G-OPD] Context distillation before ref log prob ============
+                            if self.use_context_distillation:
+                                from easyopd.methods.g_opd.ref_input_utils import prepare_critique_distillation_inputs
+
+                                apply_chat_template_kwargs = self.config.data.get(
+                                    "apply_chat_template_kwargs", {}
+                                )
+                                batch = prepare_critique_distillation_inputs(
+                                    batch=batch,
+                                    tokenizer=self.tokenizer,
+                                    critique_vllm_url=self.critique_vllm_url,
+                                    critique_model=self.critique_model,
+                                    critique_prompt_template=None,
+                                    ref_apply_chat_template_kwargs=apply_chat_template_kwargs,
+                                    max_critique_tokens=self.max_critique_tokens,
+                                    critique_temperature=self.critique_temperature,
+                                    critique_top_p=self.critique_top_p,
+                                )
+                            elif self.use_ref_solution_distillation:
+                                from easyopd.methods.g_opd.ref_input_utils import prepare_ref_model_inputs_based_on_correct_solution
+
+                                apply_chat_template_kwargs = self.config.data.get(
+                                    "apply_chat_template_kwargs", {}
+                                )
+                                batch = prepare_ref_model_inputs_based_on_correct_solution(
+                                    batch=batch,
+                                    tokenizer=self.tokenizer,
+                                    apply_chat_template_kwargs=apply_chat_template_kwargs,
+                                )
+                            # ============ [EasyOPD:G-OPD] End ============
+
                             if not self.ref_in_actor:
                                 ref_log_prob = self.ref_policy_wg.compute_ref_log_prob(batch)
                             else:
                                 ref_log_prob = self.actor_rollout_wg.compute_ref_log_prob(batch)
                             batch = batch.union(ref_log_prob)
+
+                    # ============ [EasyOPD:G-OPD] Compute base model log probs for corrected reward ============
+                    if self.use_base_models:
+                        with marked_timer("base_log_probs", timing_raw, color="green"):
+                            # Compute base_ref_log_prob using ref's base model
+                            if not self.ref_in_actor:
+                                base_ref_log_prob = self.ref_policy_wg.compute_base_ref_log_prob(batch)
+                            else:
+                                base_ref_log_prob = self.actor_rollout_wg.compute_base_ref_log_prob(batch)
+                            batch = batch.union(base_ref_log_prob)
+
+                            # Compute base_log_prob using actor's base model with input_ids
+                            # Temporarily remove ref_input_ids to ensure compute uses input_ids
+                            ref_input_tensors = {}
+                            if "ref_input_ids" in batch.batch:
+                                ref_input_tensors["ref_input_ids"] = batch.batch.pop("ref_input_ids")
+                            if "ref_attention_mask" in batch.batch:
+                                ref_input_tensors["ref_attention_mask"] = batch.batch.pop("ref_attention_mask")
+                            if "ref_position_ids" in batch.batch:
+                                ref_input_tensors["ref_position_ids"] = batch.batch.pop("ref_position_ids")
+
+                            base_log_prob = self.actor_rollout_wg.compute_base_log_prob(batch)
+                            batch = batch.union(base_log_prob)
+
+                            # Restore ref_input_ids tensors
+                            for key, tensor in ref_input_tensors.items():
+                                batch.batch[key] = tensor
+
+                            print(f"[EasyOPD:G-OPD] Computed base log probs: "
+                                  f"base_log_prob shape={batch.batch['base_log_prob'].shape}, "
+                                  f"base_ref_log_prob shape={batch.batch['base_ref_log_prob'].shape}")
+                    # ============ [EasyOPD:G-OPD] End ============
 
                     # compute values
                     if self.use_critic:
