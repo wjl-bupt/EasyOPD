@@ -33,7 +33,7 @@ L_GKD = β * KL(student || teacher) + (1 - β) * KL(teacher || student)
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
-| **β (beta)** | [0, 1] | JSD interpolation: 0=reverse KL, 0.5=symmetric, 1=forward KL |
+| **β (beta)** | [0, 1] | JSD interpolation: 0=forward KL (mean-seeking), 0.5=symmetric, 1=reverse KL (mode-seeking) |
 | **λ (lambda)** | [0, 1] | On-policy ratio: 0=off-policy, 1=on-policy |
 | **temperature** | > 0 | Softmax temperature for KL computation |
 
@@ -116,7 +116,7 @@ bash examples/gkd/run_gkd.sh \
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `loss_mode` | "gkd" | Set to "gkd", "jsd", or "generalized_jsd" |
-| `gkd_beta` | 0.5 | JSD interpolation (0=reverse KL, 1=forward KL) |
+| `gkd_beta` | 0.5 | JSD interpolation (paper Eq.1: 0=forward KL, 1=reverse KL) |
 | `gkd_temperature` | 1.0 | Softmax temperature |
 | `use_policy_gradient` | True | On-policy mode (recommended for GKD) |
 | `use_task_rewards` | True | Combine with task rewards |
@@ -134,14 +134,14 @@ bash examples/gkd/run_gkd.sh \
 --loss_mode gkd --beta 0.5 --use_policy_gradient False
 ```
 
-#### Forward KL Only (Traditional KD Direction)
-```bash
---loss_mode gkd --beta 1.0
-```
-
-#### Reverse KL Only (Mode-Seeking)
+#### Forward KL Only (Mean-Seeking, β=0)
 ```bash
 --loss_mode gkd --beta 0.0
+```
+
+#### Reverse KL Only (Mode-Seeking, β=1)
+```bash
+--loss_mode gkd --beta 1.0
 ```
 
 ---

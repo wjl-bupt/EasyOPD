@@ -85,10 +85,10 @@ class DistillationLossConfig(BaseConfig):
     # [EasyOPD:simple/simct] End
 
     # ============ [EasyOPD:GKD] Generalized JSD parameters ============
-    # beta: JSD interpolation parameter for GKD loss mode.
-    # beta=0.0 -> pure reverse KL (mode-seeking)
+    # beta: JSD interpolation parameter for GKD loss mode (paper Eq. 1 convention).
+    # beta=0.0 -> pure forward KL: KL(student || teacher) (mean-seeking)
     # beta=0.5 -> symmetric JSD (balanced, recommended)
-    # beta=1.0 -> pure forward KL (mean-seeking)
+    # beta=1.0 -> pure reverse KL: KL(teacher || student) (mode-seeking)
     gkd_beta: float = 0.5
     # temperature: softmax temperature for GKD JSD computation.
     gkd_temperature: float = 1.0

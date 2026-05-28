@@ -433,8 +433,13 @@ def compute_gkd_jsd_loss(
     """
     Compute the GKD Generalized Jensen-Shannon Divergence loss.
 
-    GKD uses a generalized JSD that interpolates between forward and reverse KL:
-        L = beta * KL(student || teacher) + (1 - beta) * KL(teacher || student)
+    Following the paper (Agarwal et al., ICLR 2024, Eq. 1):
+        D_beta[pi_T, pi_S] = beta * KL(pi_T || pi_S) + (1-beta) * KL(pi_S || pi_T)
+
+    where pi_T = teacher, pi_S = student.
+    - beta=0: forward KL (mean-seeking)
+    - beta=0.5: symmetric JSD
+    - beta=1: reverse KL (mode-seeking)
 
     This uses single-sample KL estimators (per-token log-probs) since the full
     vocabulary logits are not available in the estimator path.

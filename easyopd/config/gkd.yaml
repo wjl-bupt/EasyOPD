@@ -26,10 +26,10 @@ training:
 
   # GKD-specific parameters
   gkd:
-    # beta: JSD interpolation parameter
-    # beta=0.0 -> pure reverse KL (mode-seeking)
+    # beta: JSD interpolation parameter (paper Eq. 1 convention)
+    # beta=0.0 -> pure forward KL: KL(student || teacher) (mean-seeking)
     # beta=0.5 -> symmetric JSD (balanced, recommended)
-    # beta=1.0 -> pure forward KL (mean-seeking)
+    # beta=1.0 -> pure reverse KL: KL(teacher || student) (mode-seeking)
     beta: 0.5
 
     # temperature: softmax temperature for KL computation

@@ -27,22 +27,26 @@ def generalized_jsd(
 ) -> torch.Tensor:
     """Compute Generalized Jensen-Shannon Divergence.
 
-    GKD uses a generalized JSD that interpolates between forward and reverse KL:
+    Following the paper (Agarwal et al., ICLR 2024, Eq. 1):
 
-        L_GKD = beta * KL(student || teacher) + (1 - beta) * KL(teacher || student)
+        D_beta[pi_T, pi_S] = beta * KL(pi_T || pi_S) + (1 - beta) * KL(pi_S || pi_T)
+
+    where pi_T = teacher, pi_S = student.
 
     Special cases:
-        - beta = 0.0: Pure reverse KL (mode-seeking, student covers teacher modes)
+        - beta = 0.0: Pure forward KL = KL(student || teacher)
+                      (mean-seeking, student covers all teacher modes)
         - beta = 0.5: Symmetric JSD
-        - beta = 1.0: Pure forward KL (mean-seeking, student spreads mass)
+        - beta = 1.0: Pure reverse KL = KL(teacher || student)
+                      (mode-seeking, student concentrates on teacher's high-prob regions)
 
     Args:
         student_log_probs: Student model log-probabilities over vocabulary.
             Shape: (batch_size, seq_len, vocab_size) or (batch_size, vocab_size).
         teacher_log_probs: Teacher model log-probabilities over vocabulary.
             Shape: same as student_log_probs.
-        beta: Interpolation parameter between forward and reverse KL.
-            beta=0 -> reverse KL, beta=1 -> forward KL, beta=0.5 -> symmetric JSD.
+        beta: Interpolation parameter (paper convention).
+            beta=0 -> forward KL, beta=1 -> reverse KL, beta=0.5 -> symmetric JSD.
 
     Returns:
         Per-token JSD values. Shape: (batch_size, seq_len) or (batch_size,).
@@ -62,8 +66,8 @@ def generalized_jsd(
         dim=-1,
     )
 
-    # Generalized JSD
-    jsd = beta * forward_kl + (1.0 - beta) * reverse_kl
+    # Generalized JSD (paper Eq. 1): beta * RKL + (1-beta) * FKL
+    jsd = beta * reverse_kl + (1.0 - beta) * forward_kl
 
     return jsd
 
@@ -75,18 +79,21 @@ def generalized_jsd_from_estimator(
 ) -> torch.Tensor:
     """Compute Generalized JSD using single-sample KL estimators.
 
+    Following the paper convention (Eq. 1):
+        D_beta = beta * KL(teacher || student) + (1-beta) * KL(student || teacher)
+
     When only per-token log-probabilities (not full distributions) are available,
     we use single-sample estimators:
-        - Forward KL estimator: log p_s - log p_t (biased but simple)
-        - Reverse KL estimator: exp(log p_t - log p_s) - (log p_t - log p_s) - 1
-          (low-variance estimator, a.k.a. k3)
+        - Forward KL estimator (k1): log p_s - log p_t
+        - Reverse KL low-variance estimator (k3): exp(log p_t - log p_s) - (log p_t - log p_s) - 1
 
     Args:
         student_log_prob: Per-token student log-probability.
             Shape: (batch_size, seq_len).
         teacher_log_prob: Per-token teacher log-probability.
             Shape: (batch_size, seq_len).
-        beta: Interpolation parameter.
+        beta: Interpolation parameter (paper convention).
+            beta=0 -> forward KL, beta=1 -> reverse KL.
 
     Returns:
         Per-token JSD estimates. Shape: (batch_size, seq_len).
@@ -100,8 +107,8 @@ def generalized_jsd_from_estimator(
     reverse_kl_est = torch.exp(log_ratio_clamped) - log_ratio_clamped - 1.0
     reverse_kl_est = torch.clamp(reverse_kl_est, min=-10.0, max=10.0)
 
-    # Generalized JSD
-    jsd = beta * forward_kl_est + (1.0 - beta) * reverse_kl_est
+    # Generalized JSD (paper Eq. 1): beta * RKL + (1-beta) * FKL
+    jsd = beta * reverse_kl_est + (1.0 - beta) * forward_kl_est
 
     return jsd
 
@@ -117,12 +124,17 @@ def gkd_loss(
     """Compute the full GKD loss with temperature scaling and masking.
 
     This is the main entry point for computing GKD loss from raw logits.
+    Follows the paper convention (Eq. 1):
+        D_beta = beta * KL(teacher || student) + (1-beta) * KL(student || teacher)
 
     Args:
         student_logits: Student model logits. Shape: (batch_size, seq_len, vocab_size).
         teacher_logits: Teacher model logits. Shape: (batch_size, seq_len, vocab_size).
         response_mask: Mask for valid response tokens. Shape: (batch_size, seq_len).
-        beta: JSD interpolation parameter (0=reverse KL, 0.5=symmetric, 1=forward KL).
+        beta: JSD interpolation parameter (paper convention).
+            beta=0 -> forward KL (mean-seeking),
+            beta=0.5 -> symmetric JSD,
+            beta=1 -> reverse KL (mode-seeking).
         temperature: Temperature for softmax scaling.
         loss_agg_mode: Loss aggregation mode. Options: "token-mean", "seq-mean-token-sum".
 
