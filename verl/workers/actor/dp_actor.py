@@ -402,6 +402,26 @@ class DataParallelPPOActor(BasePPOActor):
             non_tensor_select_keys.append("opd_teacher")
         # ============ [EasyOPD:G-OPD] End ============
 
+        # ============ [EasyOPD:Vision-OPD] Include self-distillation keys ============
+        loss_mode = self.config.policy_loss.get("loss_mode", "vanilla")
+        vopd_enabled = loss_mode == "vopd"
+        if vopd_enabled:
+            vopd_required_keys = [
+                "teacher_input_ids",
+                "teacher_attention_mask",
+                "teacher_position_ids",
+                "teacher_response_start_idx",
+                "self_distillation_mask",
+            ]
+            for key in vopd_required_keys:
+                if key in data.batch.keys():
+                    select_keys.append(key)
+            if "teacher_multi_modal_inputs" in data.non_tensor_batch.keys():
+                non_tensor_select_keys.append("teacher_multi_modal_inputs")
+            if "rollout_is_weights" in data.batch.keys():
+                select_keys.append("rollout_is_weights")
+        # ============ [EasyOPD:Vision-OPD] End ============
+
         data = data.select(batch_keys=select_keys, non_tensor_batch_keys=non_tensor_select_keys)
 
         # Split to make minibatch iterator for updating the actor
@@ -502,6 +522,97 @@ class DataParallelPPOActor(BasePPOActor):
                     # vanilla -> verl.trainer.ppo.core_algos.compute_policy_loss_vanilla
                     # gpg -> verl.trainer.ppo.core_algos.compute_policy_loss_gpg
                     # clip_cov -> verl.trainer.ppo.core_algos.compute_policy_loss_clip_cov
+                    # ============ [EasyOPD:Vision-OPD] VOPD loss mode ============
+                    if loss_mode == "vopd":
+                        from easyopd.methods.vision_opd.core import compute_self_distillation_loss as vopd_loss_fn
+
+                        self_distillation_cfg = getattr(self.config, "self_distillation", None)
+                        if self_distillation_cfg is None:
+                            raise ValueError("loss_mode='vopd' requires actor.self_distillation config.")
+
+                        self_distillation_mask = model_inputs.get("self_distillation_mask", None)
+                        rollout_is_weights = model_inputs.get("rollout_is_weights", None)
+
+                        # Determine if we need GRPO fallback for samples without teacher
+                        policy_fallback_mask = None
+                        if self_distillation_mask is not None:
+                            policy_fallback_mask = (self_distillation_mask <= 0.5).to(response_mask.dtype)
+
+                        # Teacher forward pass
+                        teacher_module = getattr(self, "teacher_module", None) or self.actor_module
+                        distill_topk = self_distillation_cfg.get("distillation_topk", None)
+                        full_logit = self_distillation_cfg.get("full_logit_distillation", True)
+                        return_all_logps = full_logit and not distill_topk
+
+                        teacher_inputs = {
+                            "responses": model_inputs["responses"],
+                            "input_ids": model_inputs["teacher_input_ids"],
+                            "attention_mask": model_inputs["teacher_attention_mask"],
+                            "position_ids": model_inputs["teacher_position_ids"],
+                        }
+                        if "teacher_multi_modal_inputs" in model_inputs:
+                            teacher_inputs["multi_modal_inputs"] = model_inputs["teacher_multi_modal_inputs"]
+
+                        with torch.no_grad():
+                            teacher_entropy, teacher_log_prob = self._forward_micro_batch(
+                                teacher_inputs,
+                                temperature=temperature,
+                                calculate_entropy=False,
+                            )
+
+                        # Compute VOPD distillation loss
+                        vopd_loss, vopd_metrics = vopd_loss_fn(
+                            student_log_probs=log_prob,
+                            teacher_log_probs=teacher_log_prob,
+                            response_mask=response_mask,
+                            alpha=self_distillation_cfg.get("alpha", 0.5),
+                            full_logit_distillation=False,  # Use token-level for simplicity
+                            distillation_topk=None,
+                            distillation_add_tail=True,
+                            is_clip=self_distillation_cfg.get("is_clip", None),
+                            old_log_probs=old_log_prob,
+                            self_distillation_mask=self_distillation_mask,
+                            rollout_is_weights=rollout_is_weights,
+                        )
+
+                        # Compute GRPO loss for fallback samples (no teacher)
+                        grpo_loss = torch.tensor(0.0, device=log_prob.device)
+                        if policy_fallback_mask is not None and policy_fallback_mask.any().item():
+                            grpo_policy_loss_fn = get_policy_loss_fn("vanilla")
+                            grpo_loss, _, _, _ = grpo_policy_loss_fn(
+                                old_log_prob=old_log_prob,
+                                log_prob=log_prob,
+                                advantages=advantages,
+                                response_mask=response_mask * policy_fallback_mask.unsqueeze(1) if policy_fallback_mask.dim() == 1 else response_mask * policy_fallback_mask,
+                                loss_agg_mode=loss_agg_mode,
+                                config=self.config,
+                                rollout_log_probs=rollout_log_probs,
+                            )
+
+                        # Combined loss
+                        gamma = self_distillation_cfg.get("gamma", 1.0)
+                        policy_loss = vopd_loss * gamma + grpo_loss
+
+                        micro_batch_metrics["actor/vopd_loss"] = vopd_loss.detach().item() * loss_scale_factor
+                        micro_batch_metrics["actor/grpo_fallback_loss"] = grpo_loss.detach().item() * loss_scale_factor
+                        micro_batch_metrics.update({k: v for k, v in vopd_metrics.items()})
+
+                        if self.config.use_dynamic_bsz:
+                            loss = policy_loss * loss_scale_factor
+                        else:
+                            loss = policy_loss * loss_scale_factor
+
+                        loss.backward()
+
+                        # Accumulate metrics
+                        for key, value in micro_batch_metrics.items():
+                            if key not in metrics:
+                                metrics[key] = 0.0
+                            metrics[key] += value if isinstance(value, (int, float)) else value
+
+                        continue  # Skip the normal loss path below
+                    # ============ [EasyOPD:Vision-OPD] End ============
+
                     policy_loss_fn = get_policy_loss_fn(loss_mode)
                     pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = policy_loss_fn(
                         old_log_prob=old_log_prob,
@@ -553,5 +664,24 @@ class DataParallelPPOActor(BasePPOActor):
                 grad_norm = self._optimizer_step()
                 mini_batch_metrics = {"actor/grad_norm": grad_norm.detach().item()}
                 append_to_dict(metrics, mini_batch_metrics)
+
+                # ============ [EasyOPD:Vision-OPD] Teacher EMA update after optimizer step ============
+                if vopd_enabled and hasattr(self, "teacher_module") and self.teacher_module is not None:
+                    self_distillation_cfg = getattr(self.config, "self_distillation", None)
+                    if self_distillation_cfg is not None:
+                        teacher_reg = self_distillation_cfg.get("teacher_regularization", "ema")
+                        if teacher_reg == "ema":
+                            from easyopd.methods.vision_opd.core import ema_update_teacher
+                            update_rate = self_distillation_cfg.get("teacher_update_rate", 0.05)
+                            ema_update_teacher(self.teacher_module, self.actor_module, update_rate)
+                        elif teacher_reg == "progressive":
+                            teacher_update_interval = self_distillation_cfg.get("teacher_update_interval", None)
+                            if teacher_update_interval is not None:
+                                global_steps = data.meta_info.get("global_steps", 0)
+                                if global_steps % teacher_update_interval == 0:
+                                    from easyopd.methods.vision_opd.core import progressive_update_teacher
+                                    progressive_update_teacher(self.teacher_module, self.actor_module)
+                # ============ [EasyOPD:Vision-OPD] End ============
+
         self.actor_optimizer.zero_grad()
         return metrics

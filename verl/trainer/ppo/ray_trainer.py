@@ -642,6 +642,279 @@ class RayPPOTrainer:
 
         return stats
 
+    # ============ [EasyOPD:Vision-OPD] Build self-distillation batch ============
+    def _maybe_build_vision_opd_batch(
+        self,
+        batch,
+        reward_tensor,
+    ):
+        """Build teacher inputs for Vision-OPD self-distillation.
+
+        Constructs teacher_input_ids, teacher_attention_mask, teacher_position_ids,
+        teacher_response_start_idx, and self_distillation_mask based on the
+        self_distillation configuration.
+
+        Supports two modes:
+        1. teacher_always_on + teacher_image_key: Swap student images with teacher bbox images
+        2. teacher_always_on + teacher_prompt_mode="answer_hint": Add ground truth as hint
+
+        Returns:
+            Optional tuple of (DataProto with teacher tensors, metrics dict), or None if not applicable.
+        """
+        from verl import DataProto
+        from easyopd.methods.vision_opd.teacher_utils import (
+            prepare_teacher_messages_with_bbox_images,
+            prepare_opsd_teacher_messages,
+            extract_images_from_messages,
+            teacher_images_available,
+        )
+        import numpy as np
+
+        self_distillation_cfg = self.config.actor_rollout_ref.actor.get("self_distillation", None)
+        if self_distillation_cfg is None:
+            return None
+
+        device = batch.batch["input_ids"].device
+        response_mask = batch.batch["response_mask"]
+        responses = batch.batch["responses"]
+        batch_size = batch.batch["input_ids"].shape[0]
+
+        teacher_prompt_mode = self_distillation_cfg.get("teacher_prompt_mode", None)
+        use_opsd_answer_hint = (
+            self_distillation_cfg.get("teacher_always_on", False)
+            and teacher_prompt_mode == "answer_hint"
+        )
+        use_teacher_image_swap = (
+            self_distillation_cfg.get("teacher_always_on", False)
+            and self_distillation_cfg.get("teacher_image_key", None) is not None
+            and not use_opsd_answer_hint
+        )
+
+        if use_opsd_answer_hint:
+            # OPSD mode: add answer hint to teacher prompt
+            answer_hint_template = self_distillation_cfg.get(
+                "answer_hint_template",
+                "\n\nHere is a reference solution to this problem:\n{answer}\n\n"
+                "After understanding the reference solution, please try to solve this problem below:\n",
+            )
+
+            teacher_input_ids_list = []
+            teacher_attention_mask_list = []
+            teacher_position_ids_list = []
+            teacher_response_start_idx_list = []
+            teacher_present_mask_list = []
+
+            for i in range(batch_size):
+                # Get ground truth answer
+                reward_model_info = batch.non_tensor_batch.get("reward_model", [None] * batch_size)
+                answer = None
+                if reward_model_info[i] is not None and isinstance(reward_model_info[i], dict):
+                    answer = reward_model_info[i].get("ground_truth", None)
+                if answer is None:
+                    extra_info = batch.non_tensor_batch.get("extra_info", [None] * batch_size)
+                    if extra_info[i] is not None and isinstance(extra_info[i], dict):
+                        answer = extra_info[i].get("answer", None)
+
+                has_answer = answer is not None and str(answer).strip() != ""
+                teacher_present_mask_list.append(1.0 if has_answer else 0.0)
+
+                if not has_answer:
+                    answer = ""
+
+                raw_prompt_messages = list(batch.non_tensor_batch["raw_prompt"][i])
+                teacher_messages = prepare_opsd_teacher_messages(
+                    raw_prompt_messages, str(answer), answer_hint_template
+                )
+
+                # Tokenize teacher messages
+                apply_kwargs = dict(self.config.data.get("apply_chat_template_kwargs", {}) or {})
+                processing_class = getattr(self, "processor", None) or self.tokenizer
+                raw_prompt = processing_class.apply_chat_template(
+                    teacher_messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    **apply_kwargs,
+                )
+                max_prompt_len = self_distillation_cfg.get("max_reprompt_len", 10240)
+                teacher_prompt_output = self.tokenizer(
+                    raw_prompt,
+                    return_tensors="pt",
+                    add_special_tokens=False,
+                    truncation=True,
+                    max_length=max_prompt_len,
+                )
+                prompt_ids = teacher_prompt_output["input_ids"].squeeze(0)
+                prompt_mask = teacher_prompt_output["attention_mask"].squeeze(0)
+
+                # Concat with response
+                valid_response_len = int(response_mask[i].sum().item())
+                response_ids = responses[i, :valid_response_len]
+                teacher_ids = torch.cat([prompt_ids, response_ids], dim=0)
+                teacher_mask = torch.cat([prompt_mask, torch.ones(valid_response_len, dtype=torch.long)], dim=0)
+                teacher_pos = torch.arange(len(teacher_ids), dtype=torch.long)
+                teacher_resp_start = torch.tensor([len(prompt_ids)], dtype=torch.long)
+
+                teacher_input_ids_list.append(teacher_ids)
+                teacher_attention_mask_list.append(teacher_mask)
+                teacher_position_ids_list.append(teacher_pos)
+                teacher_response_start_idx_list.append(teacher_resp_start)
+
+            # Pad to same length
+            teacher_input_ids = torch.nn.utils.rnn.pad_sequence(
+                teacher_input_ids_list, batch_first=True,
+                padding_value=self.tokenizer.pad_token_id or 0,
+            ).to(device)
+            teacher_attention_mask = torch.nn.utils.rnn.pad_sequence(
+                teacher_attention_mask_list, batch_first=True, padding_value=0,
+            ).to(device)
+            teacher_position_ids = torch.nn.utils.rnn.pad_sequence(
+                teacher_position_ids_list, batch_first=True, padding_value=0,
+            ).to(device)
+
+            teacher_present_mask = torch.tensor(teacher_present_mask_list, dtype=torch.float32, device=device)
+            metrics = {
+                "self_distillation/teacher_always_on_fraction": teacher_present_mask.mean().item(),
+                "self_distillation/opsd_answer_hint_fraction": teacher_present_mask.mean().item(),
+                "self_distillation/policy_fallback_fraction": (1.0 - teacher_present_mask.mean()).item(),
+            }
+            return DataProto.from_dict(
+                tensors={
+                    "teacher_input_ids": teacher_input_ids,
+                    "teacher_attention_mask": teacher_attention_mask,
+                    "teacher_position_ids": teacher_position_ids,
+                    "teacher_response_start_idx": torch.stack(teacher_response_start_idx_list).to(device),
+                    "self_distillation_mask": teacher_present_mask,
+                },
+            ), metrics
+
+        elif use_teacher_image_swap:
+            # Teacher image swap mode: use bbox_images for teacher
+            teacher_image_key = self_distillation_cfg.get("teacher_image_key", "bbox_images")
+            if teacher_image_key not in batch.non_tensor_batch:
+                print(f"[EasyOPD:Vision-OPD] Warning: teacher_image_key '{teacher_image_key}' not found in batch")
+                return None
+
+            fallback_to_policy_loss = self_distillation_cfg.get("fallback_to_policy_loss_on_missing_teacher", False)
+
+            teacher_input_ids_list = []
+            teacher_attention_mask_list = []
+            teacher_position_ids_list = []
+            teacher_response_start_idx_list = []
+            teacher_multi_modal_inputs_list = []
+            teacher_present_mask_list = []
+
+            for i in range(batch_size):
+                teacher_images = batch.non_tensor_batch[teacher_image_key][i]
+                if isinstance(teacher_images, np.ndarray):
+                    teacher_images = teacher_images.tolist()
+                elif teacher_images is None:
+                    teacher_images = []
+                else:
+                    teacher_images = list(teacher_images) if not isinstance(teacher_images, list) else teacher_images
+
+                has_teacher_images = teacher_images_available(teacher_images)
+                teacher_present_mask_list.append(1.0 if has_teacher_images else 0.0)
+
+                if not has_teacher_images:
+                    if not fallback_to_policy_loss:
+                        # Use student images as fallback
+                        teacher_images = extract_images_from_messages(
+                            list(batch.non_tensor_batch["raw_prompt"][i])
+                        )
+
+                raw_prompt_messages = list(batch.non_tensor_batch["raw_prompt"][i])
+                teacher_messages = prepare_teacher_messages_with_bbox_images(
+                    raw_prompt_messages, teacher_images
+                )
+
+                # Tokenize teacher messages
+                apply_kwargs = dict(self.config.data.get("apply_chat_template_kwargs", {}) or {})
+                processing_class = getattr(self, "processor", None) or self.tokenizer
+                raw_prompt = processing_class.apply_chat_template(
+                    teacher_messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    **apply_kwargs,
+                )
+                max_prompt_len = self_distillation_cfg.get("max_reprompt_len", 10240)
+
+                # Handle multimodal processing
+                teacher_multi_modal_inputs = None
+                if hasattr(self, "processor") and self.processor is not None:
+                    prompt_images = extract_images_from_messages(teacher_messages)
+                    model_inputs = dict(
+                        self.processor(
+                            text=[raw_prompt],
+                            images=prompt_images or None,
+                            videos=None,
+                            return_tensors="pt",
+                            truncation=True,
+                            max_length=max_prompt_len,
+                        )
+                    )
+                    teacher_multi_modal_inputs = model_inputs.copy()
+                    prompt_ids = teacher_multi_modal_inputs.pop("input_ids").squeeze(0)
+                    prompt_mask = teacher_multi_modal_inputs.pop("attention_mask").squeeze(0)
+                else:
+                    teacher_prompt_output = self.tokenizer(
+                        raw_prompt,
+                        return_tensors="pt",
+                        add_special_tokens=False,
+                        truncation=True,
+                        max_length=max_prompt_len,
+                    )
+                    prompt_ids = teacher_prompt_output["input_ids"].squeeze(0)
+                    prompt_mask = teacher_prompt_output["attention_mask"].squeeze(0)
+
+                # Concat with response
+                valid_response_len = int(response_mask[i].sum().item())
+                response_ids = responses[i, :valid_response_len]
+                teacher_ids = torch.cat([prompt_ids, response_ids], dim=0)
+                teacher_mask = torch.cat([prompt_mask, torch.ones(valid_response_len, dtype=torch.long)], dim=0)
+                teacher_pos = torch.arange(len(teacher_ids), dtype=torch.long)
+                teacher_resp_start = torch.tensor([len(prompt_ids)], dtype=torch.long)
+
+                teacher_input_ids_list.append(teacher_ids)
+                teacher_attention_mask_list.append(teacher_mask)
+                teacher_position_ids_list.append(teacher_pos)
+                teacher_response_start_idx_list.append(teacher_resp_start)
+                teacher_multi_modal_inputs_list.append(teacher_multi_modal_inputs)
+
+            # Pad to same length
+            teacher_input_ids = torch.nn.utils.rnn.pad_sequence(
+                teacher_input_ids_list, batch_first=True,
+                padding_value=self.tokenizer.pad_token_id or 0,
+            ).to(device)
+            teacher_attention_mask = torch.nn.utils.rnn.pad_sequence(
+                teacher_attention_mask_list, batch_first=True, padding_value=0,
+            ).to(device)
+            teacher_position_ids = torch.nn.utils.rnn.pad_sequence(
+                teacher_position_ids_list, batch_first=True, padding_value=0,
+            ).to(device)
+
+            teacher_present_mask = torch.tensor(teacher_present_mask_list, dtype=torch.float32, device=device)
+            metrics = {
+                "self_distillation/teacher_always_on_fraction": teacher_present_mask.mean().item(),
+                "self_distillation/teacher_image_swap_fraction": teacher_present_mask.mean().item(),
+                "self_distillation/policy_fallback_fraction": (1.0 - teacher_present_mask.mean()).item(),
+            }
+
+            tensors = {
+                "teacher_input_ids": teacher_input_ids,
+                "teacher_attention_mask": teacher_attention_mask,
+                "teacher_position_ids": teacher_position_ids,
+                "teacher_response_start_idx": torch.stack(teacher_response_start_idx_list).to(device),
+                "self_distillation_mask": teacher_present_mask,
+            }
+            non_tensors = {}
+            if any(m is not None for m in teacher_multi_modal_inputs_list):
+                non_tensors["teacher_multi_modal_inputs"] = teacher_multi_modal_inputs_list
+
+            return DataProto.from_dict(tensors=tensors, non_tensors=non_tensors), metrics
+
+        return None
+    # ============ [EasyOPD:Vision-OPD] End ============
+
     def _apply_filter_groups(self, batch: DataProto) -> DataProto:
         cfg = getattr(self.config.algorithm, "filter_groups", None)
         if cfg is None or not getattr(cfg, "enable", False):
@@ -1562,6 +1835,16 @@ class RayPPOTrainer:
 
                     # implement critic warmup
                     if self.config.trainer.critic_warmup <= self.global_steps:
+                        # ============ [EasyOPD:Vision-OPD] Build self-distillation batch ============
+                        vopd_loss_mode = self.config.actor_rollout_ref.actor.policy_loss.get("loss_mode", "vanilla")
+                        if vopd_loss_mode == "vopd":
+                            vopd_result = self._maybe_build_vision_opd_batch(batch, reward_tensor)
+                            if vopd_result is not None:
+                                vopd_batch_data, vopd_metrics = vopd_result
+                                batch = batch.union(vopd_batch_data)
+                                metrics.update(vopd_metrics)
+                        # ============ [EasyOPD:Vision-OPD] End ============
+
                         # update actor
                         with marked_timer("update_actor", timing_raw, color="red"):
                             batch.meta_info["multi_turn"] = self.config.actor_rollout_ref.rollout.multi_turn.enable
