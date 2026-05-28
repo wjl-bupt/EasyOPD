@@ -422,6 +422,14 @@ class DataParallelPPOActor(BasePPOActor):
                 select_keys.append("rollout_is_weights")
         # ============ [EasyOPD:Vision-OPD] End ============
 
+        # ============ [EasyOPD:OPCD] Include context distillation keys ============
+        if "exp_log_probs" in data.batch.keys():
+            select_keys.append("exp_log_probs")
+        if self.config.get("kl_loss_type", "") == "full" and self.config.get("kl_topk", 0) > 0:
+            if "kl_topk_indices" in data.batch.keys():
+                select_keys.append("kl_topk_indices")
+        # ============ [EasyOPD:OPCD] End ============
+
         data = data.select(batch_keys=select_keys, non_tensor_batch_keys=non_tensor_select_keys)
 
         # Split to make minibatch iterator for updating the actor
@@ -612,6 +620,56 @@ class DataParallelPPOActor(BasePPOActor):
 
                         continue  # Skip the normal loss path below
                     # ============ [EasyOPD:Vision-OPD] End ============
+
+                    # ============ [EasyOPD:OPCD] Context distillation KL loss ============
+                    stage_merge = data.meta_info.get("stage_merge", False) if hasattr(data, 'meta_info') else False
+                    if not stage_merge:
+                        stage_merge = model_inputs.get("__stage_merge__", False)
+                    if stage_merge:
+                        from easyopd.methods.opcd.core import kl_penalty as opcd_kl_penalty
+
+                        on_policy_merge = data.meta_info.get("on_policy_merge", True) if hasattr(data, 'meta_info') else True
+                        if not on_policy_merge:
+                            on_policy_merge = model_inputs.get("__on_policy_merge__", True)
+
+                        exp_log_prob = model_inputs.get("exp_log_probs", None)
+                        if exp_log_prob is None:
+                            exp_log_prob = torch.zeros_like(log_prob)
+
+                        kl_loss_type = self.config.get("kl_loss_type", "full")
+                        kl_renorm_topk = self.config.get("kl_renorm_topk", False)
+
+                        if on_policy_merge:
+                            kld = opcd_kl_penalty(
+                                logprob=log_prob,
+                                ref_logprob=exp_log_prob,
+                                kl_penalty_type=kl_loss_type,
+                                kl_renorm_topk=kl_renorm_topk,
+                            )
+                        else:
+                            kld = opcd_kl_penalty(
+                                logprob=exp_log_prob,
+                                ref_logprob=log_prob,
+                                kl_penalty_type=kl_loss_type,
+                                kl_renorm_topk=kl_renorm_topk,
+                            )
+
+                        policy_loss = agg_loss(loss_mat=kld, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
+                        entropy_agg = agg_loss(loss_mat=entropy, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
+
+                        if self.config.use_dynamic_bsz:
+                            loss = policy_loss * (micro_batch_size / actual_ppo_mini_batch_size)
+                        else:
+                            loss = policy_loss / self.gradient_accumulation
+                        loss.backward()
+
+                        micro_batch_metrics = {
+                            "actor/policy_loss": policy_loss.detach().item(),
+                            "actor/entropy": entropy_agg.detach().item(),
+                        }
+                        append_to_dict(metrics, micro_batch_metrics)
+                        continue  # Skip the normal loss path below
+                    # ============ [EasyOPD:OPCD] End ============
 
                     policy_loss_fn = get_policy_loss_fn(loss_mode)
                     pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = policy_loss_fn(
