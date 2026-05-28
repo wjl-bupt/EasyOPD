@@ -84,6 +84,16 @@ class DistillationLossConfig(BaseConfig):
     cross_tokenizer_kl_direction: str = "forward"
     # [EasyOPD:simple/simct] End
 
+    # ============ [EasyOPD:GKD] Generalized JSD parameters ============
+    # beta: JSD interpolation parameter for GKD loss mode.
+    # beta=0.0 -> pure reverse KL (mode-seeking)
+    # beta=0.5 -> symmetric JSD (balanced, recommended)
+    # beta=1.0 -> pure forward KL (mean-seeking)
+    gkd_beta: float = 0.5
+    # temperature: softmax temperature for GKD JSD computation.
+    gkd_temperature: float = 1.0
+    # ============ [EasyOPD:GKD] End ============
+
     # Store global batch info for loss aggregation:
     # dp_size: data parallel size
     # batch_num_tokens: number of valid tokens in global batch

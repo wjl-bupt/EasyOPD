@@ -420,6 +420,75 @@ def compute_distillation_loss_reverse_kl_estimator(
     return distillation_losses, metrics
 
 
+# ============ [EasyOPD:GKD] Generalized JSD loss ============
+@register_distillation_loss(
+    DistillationLossSettings(names=["gkd", "jsd", "generalized_jsd"], use_estimator=True)
+)  # type: ignore[arg-type]
+def compute_gkd_jsd_loss(
+    config: ActorConfig,
+    distillation_config: DistillationConfig,
+    model_output,
+    data: TensorDict,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    """
+    Compute the GKD Generalized Jensen-Shannon Divergence loss.
+
+    GKD uses a generalized JSD that interpolates between forward and reverse KL:
+        L = beta * KL(student || teacher) + (1 - beta) * KL(teacher || student)
+
+    This uses single-sample KL estimators (per-token log-probs) since the full
+    vocabulary logits are not available in the estimator path.
+
+    Paper: "On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes"
+           Agarwal et al., ICLR 2024 (https://arxiv.org/abs/2306.13649)
+
+    Returns:
+    - distillation_losses: (bsz, resp_len)
+    - distillation_metrics: Dictionary of metrics.
+    """
+    from easyopd.methods.gkd.core import generalized_jsd_from_estimator
+
+    student_log_probs = no_padding_2_padding(model_output["log_probs"], data)
+    teacher_log_probs = no_padding_2_padding(data["teacher_logprobs"], data).squeeze(-1)
+    if data["response_mask"].is_nested:
+        response_mask_bool = data["response_mask"].bool().to_padded_tensor(False)
+    else:
+        response_mask_bool = data["response_mask"].bool()
+    assert teacher_log_probs.shape == student_log_probs.shape == response_mask_bool.shape
+
+    loss_config: DistillationLossConfig = distillation_config.distillation_loss
+    beta = getattr(loss_config, "gkd_beta", 0.5)
+
+    distillation_losses = generalized_jsd_from_estimator(
+        student_log_prob=student_log_probs,
+        teacher_log_prob=teacher_log_probs,
+        beta=beta,
+    )
+
+    # Metrics
+    with torch.no_grad():
+        forward_kl_est = student_log_probs - teacher_log_probs
+        log_ratio = teacher_log_probs - student_log_probs
+        log_ratio_clamped = torch.clamp(log_ratio, min=-20.0, max=20.0)
+        reverse_kl_est = torch.exp(log_ratio_clamped) - log_ratio_clamped - 1.0
+
+        valid_mask = response_mask_bool
+        forward_kl_mean = forward_kl_est[valid_mask].mean() if valid_mask.any() else torch.tensor(0.0)
+        reverse_kl_mean = reverse_kl_est[valid_mask].mean() if valid_mask.any() else torch.tensor(0.0)
+        jsd_mean = distillation_losses[valid_mask].mean() if valid_mask.any() else torch.tensor(0.0)
+
+    metrics = {
+        "distillation/gkd_forward_kl": Metric(AggregationType.MEAN, forward_kl_mean),
+        "distillation/gkd_reverse_kl": Metric(AggregationType.MEAN, reverse_kl_mean),
+        "distillation/gkd_jsd": Metric(AggregationType.MEAN, jsd_mean),
+        "distillation/gkd_beta": Metric(AggregationType.MEAN, torch.tensor(beta)),
+    }
+    return distillation_losses, metrics
+
+
+# ============ [EasyOPD:GKD] End ============
+
+
 # [EasyOPD:simple/simct]
 # Register EasyOPD cross-tokenizer KD losses. The actual implementations live
 # under `easyopd/methods/*/losses.py`; we only trigger registration here so
