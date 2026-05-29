@@ -385,8 +385,22 @@ class DataParallelPPOActor(BasePPOActor):
             )
             select_keys.append("rollout_log_probs")
 
+        # ============ [EasyOPD:G-OPD] Include additional log probs for OPD ============
+        if self.config.policy_loss.only_reverse_kl_advantages and "ref_log_prob" in data.batch.keys():
+            if "ref_log_prob" not in select_keys:
+                select_keys.append("ref_log_prob")
+        if "base_log_prob" in data.batch.keys():
+            select_keys.append("base_log_prob")
+        if "base_ref_log_prob" in data.batch.keys():
+            select_keys.append("base_ref_log_prob")
+        # ============ [EasyOPD:G-OPD] End ============
+
         has_multi_modal_inputs = "multi_modal_inputs" in data.non_tensor_batch.keys()
         non_tensor_select_keys = ["multi_modal_inputs"] if has_multi_modal_inputs else []
+        # ============ [EasyOPD:G-OPD] Include opd_teacher for multi-teacher distillation ============
+        if "opd_teacher" in data.non_tensor_batch.keys():
+            non_tensor_select_keys.append("opd_teacher")
+        # ============ [EasyOPD:G-OPD] End ============
 
         data = data.select(batch_keys=select_keys, non_tensor_batch_keys=non_tensor_select_keys)
 
@@ -439,6 +453,50 @@ class DataParallelPPOActor(BasePPOActor):
                         old_log_prob = log_prob.detach()
                     else:
                         old_log_prob = model_inputs["old_log_probs"]
+
+                    # ============ [EasyOPD:G-OPD] Compute G-OPD advantages ============
+                    if self.config.policy_loss.only_reverse_kl_advantages:
+                        from easyopd.methods.g_opd.core import (
+                            compute_g_opd_advantages,
+                            compute_multi_teacher_advantages,
+                            compute_standard_opd_advantages,
+                        )
+
+                        if "base_log_prob" in model_inputs and "base_ref_log_prob" in model_inputs:
+                            lambda_vals = self.config.policy_loss.lambda_vals
+
+                            if self.config.policy_loss.multi_teacher_distill:
+                                # Multi-teacher distillation
+                                opd_teacher = model_inputs.get("opd_teacher", None)
+                                if opd_teacher is not None:
+                                    advantages = compute_multi_teacher_advantages(
+                                        old_log_probs=old_log_prob,
+                                        ref_log_prob=model_inputs["ref_log_prob"],
+                                        base_ref_log_prob=model_inputs["base_ref_log_prob"],
+                                        base_log_prob=model_inputs["base_log_prob"],
+                                        opd_teacher=opd_teacher,
+                                        lambda_vals=lambda_vals,
+                                    )
+                                else:
+                                    advantages = compute_standard_opd_advantages(
+                                        old_log_probs=old_log_prob,
+                                        ref_log_prob=model_inputs["ref_log_prob"],
+                                    )
+                            else:
+                                # Single-teacher G-OPD / ExOPD
+                                advantages = compute_g_opd_advantages(
+                                    old_log_probs=old_log_prob,
+                                    ref_log_prob=model_inputs["ref_log_prob"],
+                                    base_log_prob=model_inputs["base_log_prob"],
+                                    lambda_vals=lambda_vals,
+                                )
+                        else:
+                            # Standard OPD without base model normalization
+                            advantages = compute_standard_opd_advantages(
+                                old_log_probs=old_log_prob,
+                                ref_log_prob=model_inputs["ref_log_prob"],
+                            )
+                    # ============ [EasyOPD:G-OPD] End ============
 
                     loss_mode = self.config.policy_loss.get("loss_mode", "vanilla")
                     # vanilla -> verl.trainer.ppo.core_algos.compute_policy_loss_vanilla

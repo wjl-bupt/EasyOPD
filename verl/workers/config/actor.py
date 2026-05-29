@@ -41,6 +41,9 @@ class PolicyLossConfig(BaseConfig):
         clip_cov_ub (float): Upper bound for clip-cov loss.
         kl_cov_ratio (float): Ratio of tokens to be applied KL penalty for kl-cov loss.
         ppo_kl_coef (float): KL divergence penalty coefficient.
+        only_reverse_kl_advantages (bool): [EasyOPD:G-OPD] Use reverse KL as advantages for OPD.
+        lambda_vals (float): [EasyOPD:G-OPD] Reward scaling factor (1.0=OPD, >1.0=ExOPD).
+        multi_teacher_distill (bool): [EasyOPD:G-OPD] Enable multi-teacher distillation.
     """
 
     loss_mode: str = "vanilla"
@@ -49,6 +52,11 @@ class PolicyLossConfig(BaseConfig):
     clip_cov_ub: float = 5.0
     kl_cov_ratio: float = 0.0002
     ppo_kl_coef: float = 0.1
+    # ============ [EasyOPD:G-OPD] On-policy distillation parameters ============
+    only_reverse_kl_advantages: bool = False
+    lambda_vals: float = 1.0
+    multi_teacher_distill: bool = False
+    # ============ [EasyOPD:G-OPD] End ============
 
 
 @dataclass

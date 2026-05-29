@@ -104,3 +104,11 @@ class AlgoConfig(BaseConfig):
     pf_ppo: dict[str, Any] = field(default_factory=dict)
     filter_groups: FilterGroupsConfig = field(default_factory=FilterGroupsConfig)
     token_kl_reg: TokenKLRegConfig = field(default_factory=TokenKLRegConfig)
+    # ============ [EasyOPD:G-OPD] Context distillation and ref solution distillation ============
+    critique_vllm_url: Optional[str] = None
+    critique_model: Optional[str] = None
+    max_critique_tokens: int = 2048
+    critique_temperature: float = 0.0
+    critique_top_p: float = 1.0
+    use_ref_solution_distillation: bool = False
+    # ============ [EasyOPD:G-OPD] End ============
