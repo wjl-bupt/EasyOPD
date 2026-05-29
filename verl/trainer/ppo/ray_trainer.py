@@ -1191,12 +1191,22 @@ class RayPPOTrainer:
                     privileged_ctx = self.opsa_harmful_context
 
                 # Decode only the prompt part (no response tokens).
-                # prompt_ids_batch[i] may still have left-padding; strip it using attention_mask.
-                attn = batch.batch["attention_mask"][i]
-                prompt_part_len = int(attn[: prompt_ids_batch[i].shape[-1]].sum().item())
-                raw_prompt_text = self.tokenizer.decode(
-                    prompt_ids_batch[i][-prompt_part_len:], skip_special_tokens=True
-                )
+                # batch["prompts"] has shape (B, prompt_len); batch["input_ids"] has shape
+                # (B, prompt_len + resp_len).  In either case we use the attention_mask
+                # sliced to exactly prompt_ids_batch[i]'s own length to strip left-padding.
+                prompt_seq_len = prompt_ids_batch[i].shape[-1]
+                # attention_mask covers the full input_ids sequence; take only the
+                # first prompt_seq_len positions which correspond to the prompt.
+                attn = batch.batch["attention_mask"][i, :prompt_seq_len]
+                # Find the first valid (non-padding) token position for robust decoding.
+                valid_indices = (attn == 1).nonzero(as_tuple=True)[0]
+                if len(valid_indices) > 0:
+                    first_valid_idx = valid_indices[0]
+                    raw_prompt_text = self.tokenizer.decode(
+                        prompt_ids_batch[i][first_valid_idx:], skip_special_tokens=True
+                    )
+                else:
+                    raw_prompt_text = ""
 
                 teacher_messages = [
                     {"role": "system", "content": privileged_ctx},

@@ -738,9 +738,9 @@ class DataParallelPPOActor(BasePPOActor):
                                 kl_in_window = kl_mean
 
                         opsa_metrics = {
-                            "opsa/kl_mean": kl_mean.item(),
-                            "opsa/kl_in_window": kl_in_window.item(),
-                            "opsa/loss": policy_loss.detach().item(),
+                            "opsa/kl_mean": kl_mean.item() * loss_scale_factor,
+                            "opsa/kl_in_window": kl_in_window.item() * loss_scale_factor,
+                            "opsa/loss": policy_loss.detach().item() * loss_scale_factor,
                         }
                         append_to_dict(metrics, opsa_metrics)
                         continue
