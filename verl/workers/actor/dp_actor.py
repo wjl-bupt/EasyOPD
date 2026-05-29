@@ -87,6 +87,11 @@ class DataParallelPPOActor(BasePPOActor):
         )
         self.device_name = get_device_name()
 
+        # ============ [EasyOPD] Hook Dispatcher reference ============
+        # Will be set by the trainer after initialization if hook-based dispatch is active.
+        self._hook_dispatcher = None
+        # ============ [EasyOPD] End ============
+
     def _forward_micro_batch(
         self, micro_batch, temperature, calculate_entropy=False
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -385,7 +390,7 @@ class DataParallelPPOActor(BasePPOActor):
             )
             select_keys.append("rollout_log_probs")
 
-        # ============ [EasyOPD:G-OPD] Include additional log probs for OPD ============
+        # ============ [EasyOPD] Include additional log probs for OPD ============
         if self.config.policy_loss.only_reverse_kl_advantages and "ref_log_prob" in data.batch.keys():
             if "ref_log_prob" not in select_keys:
                 select_keys.append("ref_log_prob")
@@ -393,16 +398,16 @@ class DataParallelPPOActor(BasePPOActor):
             select_keys.append("base_log_prob")
         if "base_ref_log_prob" in data.batch.keys():
             select_keys.append("base_ref_log_prob")
-        # ============ [EasyOPD:G-OPD] End ============
+        # ============ [EasyOPD] End ============
 
         has_multi_modal_inputs = "multi_modal_inputs" in data.non_tensor_batch.keys()
         non_tensor_select_keys = ["multi_modal_inputs"] if has_multi_modal_inputs else []
-        # ============ [EasyOPD:G-OPD] Include opd_teacher for multi-teacher distillation ============
+        # ============ [EasyOPD] Include opd_teacher for multi-teacher distillation ============
         if "opd_teacher" in data.non_tensor_batch.keys():
             non_tensor_select_keys.append("opd_teacher")
-        # ============ [EasyOPD:G-OPD] End ============
+        # ============ [EasyOPD] End ============
 
-        # ============ [EasyOPD:Vision-OPD] Include self-distillation keys ============
+        # ============ [EasyOPD] Include self-distillation keys ============
         loss_mode = self.config.policy_loss.get("loss_mode", "vanilla")
         vopd_enabled = loss_mode == "vopd"
         if vopd_enabled:
@@ -420,15 +425,15 @@ class DataParallelPPOActor(BasePPOActor):
                 non_tensor_select_keys.append("teacher_multi_modal_inputs")
             if "rollout_is_weights" in data.batch.keys():
                 select_keys.append("rollout_is_weights")
-        # ============ [EasyOPD:Vision-OPD] End ============
+        # ============ [EasyOPD] End ============
 
-        # ============ [EasyOPD:OPCD] Include context distillation keys ============
+        # ============ [EasyOPD] Include context distillation keys (OPCD) ============
         if "exp_log_probs" in data.batch.keys():
             select_keys.append("exp_log_probs")
         if self.config.get("kl_loss_type", "") == "full" and self.config.get("kl_topk", 0) > 0:
             if "kl_topk_indices" in data.batch.keys():
                 select_keys.append("kl_topk_indices")
-        # ============ [EasyOPD:OPCD] End ============
+        # ============ [EasyOPD] End ============
 
         data = data.select(batch_keys=select_keys, non_tensor_batch_keys=non_tensor_select_keys)
 
@@ -482,7 +487,7 @@ class DataParallelPPOActor(BasePPOActor):
                     else:
                         old_log_prob = model_inputs["old_log_probs"]
 
-                    # ============ [EasyOPD:G-OPD] Compute G-OPD advantages ============
+                    # ============ [EasyOPD] Compute G-OPD advantages ============
                     if self.config.policy_loss.only_reverse_kl_advantages:
                         from easyopd.methods.g_opd.core import (
                             compute_g_opd_advantages,
@@ -524,13 +529,13 @@ class DataParallelPPOActor(BasePPOActor):
                                 old_log_probs=old_log_prob,
                                 ref_log_prob=model_inputs["ref_log_prob"],
                             )
-                    # ============ [EasyOPD:G-OPD] End ============
+                    # ============ [EasyOPD] End ============
 
                     loss_mode = self.config.policy_loss.get("loss_mode", "vanilla")
                     # vanilla -> verl.trainer.ppo.core_algos.compute_policy_loss_vanilla
                     # gpg -> verl.trainer.ppo.core_algos.compute_policy_loss_gpg
                     # clip_cov -> verl.trainer.ppo.core_algos.compute_policy_loss_clip_cov
-                    # ============ [EasyOPD:Vision-OPD] VOPD loss mode ============
+                    # ============ [EasyOPD] VOPD loss mode ============
                     if loss_mode == "vopd":
                         from easyopd.methods.vision_opd.core import compute_self_distillation_loss as vopd_loss_fn
 
@@ -619,9 +624,9 @@ class DataParallelPPOActor(BasePPOActor):
                             metrics[key] += value if isinstance(value, (int, float)) else value
 
                         continue  # Skip the normal loss path below
-                    # ============ [EasyOPD:Vision-OPD] End ============
+                    # ============ [EasyOPD] End ============
 
-                    # ============ [EasyOPD:OPCD] Context distillation KL loss ============
+                    # ============ [EasyOPD] Context distillation KL loss (OPCD via hook dispatch) ============
                     stage_merge = data.meta_info.get("stage_merge", False) if hasattr(data, 'meta_info') else False
                     if not stage_merge:
                         stage_merge = model_inputs.get("__stage_merge__", False)
@@ -669,7 +674,7 @@ class DataParallelPPOActor(BasePPOActor):
                         }
                         append_to_dict(metrics, micro_batch_metrics)
                         continue  # Skip the normal loss path below
-                    # ============ [EasyOPD:OPCD] End ============
+                    # ============ [EasyOPD] End ============
 
                     policy_loss_fn = get_policy_loss_fn(loss_mode)
                     pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = policy_loss_fn(
@@ -723,7 +728,7 @@ class DataParallelPPOActor(BasePPOActor):
                 mini_batch_metrics = {"actor/grad_norm": grad_norm.detach().item()}
                 append_to_dict(metrics, mini_batch_metrics)
 
-                # ============ [EasyOPD:Vision-OPD] Teacher EMA update after optimizer step ============
+                # ============ [EasyOPD] Teacher EMA update after optimizer step ============
                 if vopd_enabled and hasattr(self, "teacher_module") and self.teacher_module is not None:
                     self_distillation_cfg = getattr(self.config, "self_distillation", None)
                     if self_distillation_cfg is not None:
@@ -739,7 +744,7 @@ class DataParallelPPOActor(BasePPOActor):
                                 if global_steps % teacher_update_interval == 0:
                                     from easyopd.methods.vision_opd.core import progressive_update_teacher
                                     progressive_update_teacher(self.teacher_module, self.actor_module)
-                # ============ [EasyOPD:Vision-OPD] End ============
+                # ============ [EasyOPD] End ============
 
         self.actor_optimizer.zero_grad()
         return metrics

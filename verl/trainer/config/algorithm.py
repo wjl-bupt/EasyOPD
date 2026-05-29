@@ -67,7 +67,7 @@ class TokenKLRegConfig(BaseConfig):
     gamma: float = 1.0
     beta_min: float = 0.0
     beta_max: Optional[float] = None
-    # [EasyOPD:SOD] Step-wise OPD parameters
+    # [EasyOPD] Step-wise OPD parameters (consumed by SOD method via hook dispatch)
     stepwise_enable: bool = False
     stepwise_epsilon: float = 1e-6
     stepwise_delta: float = 0.5
@@ -104,20 +104,23 @@ class AlgoConfig(BaseConfig):
     pf_ppo: dict[str, Any] = field(default_factory=dict)
     filter_groups: FilterGroupsConfig = field(default_factory=FilterGroupsConfig)
     token_kl_reg: TokenKLRegConfig = field(default_factory=TokenKLRegConfig)
-    # ============ [EasyOPD:G-OPD] Context distillation and ref solution distillation ============
+    # ============ [EasyOPD] Context distillation and ref solution distillation ============
     critique_vllm_url: Optional[str] = None
     critique_model: Optional[str] = None
     max_critique_tokens: int = 2048
     critique_temperature: float = 0.0
     critique_top_p: float = 1.0
     use_ref_solution_distillation: bool = False
-    # ============ [EasyOPD:G-OPD] End ============
-    # ============ [EasyOPD:Vision-OPD] Rollout correction configuration ============
+    # ============ [EasyOPD] End ============
+    # ============ [EasyOPD] Rollout correction configuration ============
     rollout_correction: Optional["RolloutCorrectionConfig"] = None
-    # ============ [EasyOPD:Vision-OPD] End ============
+    # ============ [EasyOPD] End ============
+    # ============ [EasyOPD] Generic method config (consumed by HookDispatcher) ============
+    easyopd: Optional[dict[str, Any]] = None
+    # ============ [EasyOPD] End ============
 
 
-# ============ [EasyOPD:Vision-OPD] Rollout correction config ============
+# ============ [EasyOPD] Rollout correction config ============
 @dataclass
 class RolloutCorrectionConfig(BaseConfig):
     """Configuration for Rollout Correction (addresses off-policy issues in RL training).
@@ -141,4 +144,4 @@ class RolloutCorrectionConfig(BaseConfig):
     rollout_is_batch_normalize: bool = False
     rollout_rs: Optional[str] = None
     rollout_rs_threshold: Optional[Any] = None
-# ============ [EasyOPD:Vision-OPD] End ============
+# ============ [EasyOPD] End ============

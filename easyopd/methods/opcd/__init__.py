@@ -30,6 +30,7 @@ from easyopd.methods.opcd.core import (
     truncate_experience,
     EXPERIENCE_SOLVE_PROMPT_TEMPLATE,
 )
+from easyopd.registry import register_method
 
 __all__ = [
     "kl_penalty",
@@ -41,6 +42,7 @@ __all__ = [
 ]
 
 
+@register_method("opcd")
 class OPCDMethod:
     """OPCD: On-Policy Context Distillation for Language Models.
 

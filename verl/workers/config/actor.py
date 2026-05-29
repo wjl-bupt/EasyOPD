@@ -28,7 +28,7 @@ from .optimizer import OptimizerConfig
 __all__ = ["SelfDistillationConfig", "PolicyLossConfig", "ActorConfig", "FSDPActorConfig", "McoreActorConfig"]
 
 
-# ============ [EasyOPD:Vision-OPD] Self-distillation configuration ============
+# ============ [EasyOPD] Self-distillation configuration ============
 @dataclass
 class SelfDistillationConfig(BaseConfig):
     """Configuration for self-distillation loss (Vision-OPD).
@@ -99,7 +99,7 @@ class SelfDistillationConfig(BaseConfig):
     )
     fallback_to_policy_loss_on_missing_teacher: bool = False
     log_prob_dump_dir: Optional[str] = None
-# ============ [EasyOPD:Vision-OPD] End ============
+# ============ [EasyOPD] End ============
 
 
 @dataclass
@@ -115,9 +115,9 @@ class PolicyLossConfig(BaseConfig):
         clip_cov_ub (float): Upper bound for clip-cov loss.
         kl_cov_ratio (float): Ratio of tokens to be applied KL penalty for kl-cov loss.
         ppo_kl_coef (float): KL divergence penalty coefficient.
-        only_reverse_kl_advantages (bool): [EasyOPD:G-OPD] Use reverse KL as advantages for OPD.
-        lambda_vals (float): [EasyOPD:G-OPD] Reward scaling factor (1.0=OPD, >1.0=ExOPD).
-        multi_teacher_distill (bool): [EasyOPD:G-OPD] Enable multi-teacher distillation.
+        only_reverse_kl_advantages (bool): [EasyOPD] Use reverse KL as advantages for OPD.
+        lambda_vals (float): [EasyOPD] Reward scaling factor (1.0=OPD, >1.0=ExOPD).
+        multi_teacher_distill (bool): [EasyOPD] Enable multi-teacher distillation.
     """
 
     loss_mode: str = "vanilla"
@@ -126,11 +126,11 @@ class PolicyLossConfig(BaseConfig):
     clip_cov_ub: float = 5.0
     kl_cov_ratio: float = 0.0002
     ppo_kl_coef: float = 0.1
-    # ============ [EasyOPD:G-OPD] On-policy distillation parameters ============
+    # ============ [EasyOPD] On-policy distillation parameters ============
     only_reverse_kl_advantages: bool = False
     lambda_vals: float = 1.0
     multi_teacher_distill: bool = False
-    # ============ [EasyOPD:G-OPD] End ============
+    # ============ [EasyOPD] End ============
 
 
 @dataclass
@@ -192,11 +192,11 @@ class ActorConfig(BaseConfig):
     use_torch_compile: bool = True
     kl_loss_coef: float = 0.001
     kl_loss_type: str = "low_var_kl"
-    # ============ [EasyOPD:OPCD] KL distillation config ============
+    # ============ [EasyOPD] KL distillation config (used by OPCD method) ============
     kl_topk: int = 0  # If > 0, use top-k logits for full KL computation (memory efficient)
     kl_renorm_topk: bool = False  # Whether to renormalize top-k log-probs before KL
     profile_kl: bool = False  # Whether to profile KL computation
-    # ============ [EasyOPD:OPCD] End ============
+    # ============ [EasyOPD] End ============
     ppo_epochs: int = 1
     shuffle: bool = False
     checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
@@ -207,9 +207,9 @@ class ActorConfig(BaseConfig):
     data_loader_seed = 1
     n: int = 1  # must be override by sampling config
     model_config: HFModelConfig = field(default_factory=BaseConfig)
-    # ============ [EasyOPD:Vision-OPD] Self-distillation config ============
+    # ============ [EasyOPD] Self-distillation config ============
     self_distillation: SelfDistillationConfig = field(default_factory=SelfDistillationConfig)
-    # ============ [EasyOPD:Vision-OPD] End ============
+    # ============ [EasyOPD] End ============
 
     def __post_init__(self):
         """Validate actor configuration parameters."""

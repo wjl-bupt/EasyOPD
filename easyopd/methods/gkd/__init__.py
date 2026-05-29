@@ -25,6 +25,7 @@ from easyopd.methods.gkd.core import (
     gkd_loss,
     compute_on_policy_ratio,
 )
+from easyopd.registry import register_method
 
 __all__ = [
     "generalized_jsd",
@@ -35,6 +36,7 @@ __all__ = [
 ]
 
 
+@register_method("gkd")
 class GKDMethod:
     """GKD: Generalized Knowledge Distillation (On-Policy Distillation).
 

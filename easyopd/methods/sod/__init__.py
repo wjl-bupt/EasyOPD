@@ -20,6 +20,7 @@ from easyopd.methods.sod.core import (
     apply_stepwise_opd,
     compute_stepwise_opd_weights,
 )
+from easyopd.registry import register_method
 
 __all__ = [
     "compute_stepwise_opd_weights",
@@ -28,6 +29,7 @@ __all__ = [
 ]
 
 
+@register_method("sod")
 class SODMethod:
     """SOD: Step-wise On-policy Distillation.
 

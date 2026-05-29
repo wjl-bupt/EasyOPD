@@ -39,3 +39,19 @@ distillation:
     distillation_loss_coef: 1.0
     loss_max_clamp: 10.0
     cross_tokenizer_kl_direction: reverse
+
+# ---------- data ---------- #
+data:
+  # Option 1 (Recommended): HuggingFace dataset (auto-download + convert)
+  dataset: "openai/gsm8k"
+  dataset_split: "train"
+  val_split: "test"
+  prompt_template: "math_qa"
+
+  # Option 2: Local Parquet files (overrides Option 1)
+  # train_files: ["/path/to/your/train.parquet"]
+  # val_files: ["/path/to/your/val.parquet"]
+
+  prompt_key: content
+  max_prompt_length: 1024
+  truncation: right

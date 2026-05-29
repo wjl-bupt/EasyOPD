@@ -27,6 +27,7 @@ from easyopd.methods.sdpo.core import (
     select_demonstration,
     compute_ema_update,
 )
+from easyopd.registry import register_method
 
 __all__ = [
     "compute_sdpo_self_distillation_loss",
@@ -37,6 +38,7 @@ __all__ = [
 ]
 
 
+@register_method("sdpo")
 class SDPOMethod:
     """SDPO: Self-Distilled Policy Optimization.
 

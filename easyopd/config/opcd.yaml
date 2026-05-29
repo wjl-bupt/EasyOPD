@@ -60,7 +60,16 @@ rollout:
   gpu_memory_utilization: 0.8
 
 data:
-  train_files: ["<path to DAPO train data>/dapo_train.parquet"]
-  val_files: ["<path to DAPO test data>/dapo_test.parquet"]
+  # Option 1 (Recommended): HuggingFace dataset (auto-download + convert)
+  dataset: "openai/gsm8k"
+  dataset_split: "train"
+  val_split: "test"
+  prompt_template: "math_qa"
+
+  # Option 2: Local Parquet files (overrides Option 1)
+  # train_files: ["/path/to/dapo_train.parquet"]
+  # val_files: ["/path/to/dapo_test.parquet"]
+
   prompt_key: content
+  max_prompt_length: 1024
   truncation: right

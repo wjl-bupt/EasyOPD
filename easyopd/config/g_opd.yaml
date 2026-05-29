@@ -57,6 +57,17 @@ rollout:
   n: 1
 
 data:
-  train_files: ["<path to training data>"]
-  val_files: ["<path to eval data>"]
+  # Option 1 (Recommended): HuggingFace dataset (auto-download + convert)
+  dataset: "openai/gsm8k"
+  dataset_split: "train"
+  val_split: "test"
+  prompt_template: "math_qa"
+
+  # Option 2: Local Parquet files (overrides Option 1)
+  # train_files: ["/path/to/your/train.parquet"]
+  # val_files: ["/path/to/your/val.parquet"]
+
+  prompt_key: content
+  max_prompt_length: 1024
+  truncation: right
   return_raw_chat: true  # Required for context distillation
