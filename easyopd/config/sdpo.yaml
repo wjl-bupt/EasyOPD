@@ -1,0 +1,97 @@
+# SDPO: Self-Distilled Policy Optimization
+# Paper: https://arxiv.org/abs/2601.20802 (Hübotter et al., 2026)
+#
+# This config defines the SDPO-specific parameters for EasyOPD.
+# Use with: bash examples/sdpo/run_sdpo.sh
+
+method:
+  name: sdpo
+  description: "SDPO: Self-Distilled Policy Optimization (RL via Self-Distillation)"
+
+model:
+  # Student model (to be trained, also serves as self-teacher via EMA)
+  student_model_path: "Qwen/Qwen2.5-7B-Instruct"
+
+training:
+  # verl standard training parameters
+  adv_estimator: grpo
+  norm_adv_by_std_in_grpo: false
+  loss_agg_mode: token-mean
+  actor_lr: 1e-5
+  train_batch_size: 32
+  ppo_mini_batch_size: 32
+  total_epochs: 1
+  total_training_steps: 100
+
+  # SDPO-specific: policy loss mode
+  policy_loss:
+    loss_mode: sdpo
+
+  # SDPO self-distillation parameters
+  self_distillation:
+    # Whether to use full-logit KL distillation
+    full_logit_distillation: true
+
+    # Top-k logits for distillation (null = full vocabulary)
+    distillation_topk: 100
+
+    # Whether to add a tail bucket for top-k distillation
+    distillation_add_tail: true
+
+    # KL interpolation coefficient:
+    # 0.0 = forward KL, 1.0 = reverse KL, 0.5 = symmetric JSD
+    alpha: 0.5
+
+    # Minimum sequence reward to be considered a successful demonstration
+    success_reward_threshold: 1.0
+
+    # Teacher regularization mode: "ema" or "trust-region"
+    teacher_regularization: ema
+
+    # EMA update rate for teacher weights
+    teacher_update_rate: 0.05
+
+    # IS clip for loss; null disables IS weighting
+    is_clip: 2.0
+
+    # Maximum length of the reprompted prompt
+    max_reprompt_len: 10240
+
+    # Truncation method for reprompted prompts
+    reprompt_truncation: right
+
+    # Whether to not reprompt on self-success
+    dont_reprompt_on_self_success: true
+
+    # Whether to remove <think>...</think> tags from demonstrations
+    remove_thinking_from_demonstration: true
+
+    # Whether to include environment feedback in reprompting
+    include_environment_feedback: true
+
+    # If true, only use feedback when no solution is available
+    environment_feedback_only_without_solution: true
+
+    # Reprompting template
+    reprompt_template: "{prompt}{solution}{feedback}\n\nCorrectly solve the original question.\n"
+    solution_template: "\nCorrect solution:\n\n{successful_previous_attempt}\n\n"
+    feedback_template: "\nThe following is feedback from your unsuccessful earlier attempt:\n\n{feedback_raw}\n\n"
+
+  # Rollout correction (optional, for off-policy correction)
+  rollout_correction:
+    rollout_is: token
+    rollout_is_threshold: 2.0
+
+rollout:
+  n: 8
+  calculate_log_probs: true
+  max_prompt_length: 2048
+  max_response_length: 8192
+  temperature: 1.0
+  gpu_memory_utilization: 0.8
+
+data:
+  train_files: ["<path to training data>"]
+  val_files: ["<path to validation data>"]
+  prompt_key: content
+  truncation: right
