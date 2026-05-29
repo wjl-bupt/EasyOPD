@@ -430,13 +430,11 @@ class DataParallelPPOActor(BasePPOActor):
                 select_keys.append("kl_topk_indices")
         # ============ [EasyOPD:OPCD] End ============
 
-        # ============ [EasyOPD:OPSA] Include teacher logits for self-distillation ============
+        # ============ [EasyOPD:OPSA] Include teacher log-probs for self-distillation ============
         opsa_enabled = self.config.get("opsa_enable", False)
         if opsa_enabled:
-            if "opsa_teacher_logits" in data.batch.keys():
-                select_keys.append("opsa_teacher_logits")
-            if "opsa_query_type" in data.batch.keys():
-                select_keys.append("opsa_query_type")
+            if "opsa_teacher_log_probs" in data.batch.keys():
+                select_keys.append("opsa_teacher_log_probs")
         # ============ [EasyOPD:OPSA] End ============
 
         data = data.select(batch_keys=select_keys, non_tensor_batch_keys=non_tensor_select_keys)
@@ -681,30 +679,71 @@ class DataParallelPPOActor(BasePPOActor):
                     # ============ [EasyOPD:OPCD] End ============
 
                     # ============ [EasyOPD:OPSA] On-Policy Self-Distillation loss ============
+                    # opsa_teacher_log_probs: (batch, response_len) per-token log-probs from
+                    # the frozen ref model conditioned on the type-conditional privileged context.
+                    # log_prob (student): same shape, from the current on-policy forward pass above.
+                    # Both are already per-token log-probs for the chosen token (scalar per position),
+                    # so we cannot do full-vocabulary KL directly here.  Instead we use the token-level
+                    # cross-entropy surrogate: CE(p_T, p_S) ≈ -p_T(y_t) * log p_S(y_t), which equals
+                    # the per-chosen-token contribution of the forward KL when only the argmax mass
+                    # matters — the standard approach when full vocab logits are unavailable.
                     opsa_enabled = self.config.get("opsa_enable", False)
-                    if opsa_enabled and "opsa_teacher_logits" in model_inputs:
-                        from easyopd.methods.opsa.core import opsa_loss
+                    if opsa_enabled and "opsa_teacher_log_probs" in model_inputs:
+                        from easyopd.methods.opsa.core import (
+                            compute_early_window_weights,
+                        )
 
-                        teacher_logits = model_inputs["opsa_teacher_logits"]
-                        # Get student logits from current forward pass
-                        student_logits = model_output.logits if hasattr(model_output, 'logits') else None
+                        teacher_log_probs = model_inputs["opsa_teacher_log_probs"]  # (B, resp_len)
+                        student_log_probs = log_prob  # (B, resp_len), from _forward_micro_batch above
 
-                        if student_logits is not None:
-                            opsa_kl_loss, opsa_metrics = opsa_loss(
-                                student_logits=student_logits,
-                                teacher_logits=teacher_logits,
-                                response_mask=response_mask,
-                                temperature=float(self.config.get("opsa_temperature", 1.0)),
+                        # Per-token KL surrogate: -exp(teacher_lp) * (teacher_lp - student_lp)
+                        # = exp(teacher_lp) * (student_lp - teacher_lp) negated
+                        # Equivalent to token-level forward KL contribution for the chosen token.
+                        kl_per_token = (teacher_log_probs.exp() * (teacher_log_probs - student_log_probs)).clamp(min=0.0)
+
+                        opsa_use_window = self.config.get("opsa_use_window_weighting", True)
+                        if opsa_use_window:
+                            window_weights = compute_early_window_weights(
+                                response_mask,
                                 window_size=int(self.config.get("opsa_window_size", 32)),
                                 decay_type=self.config.get("opsa_decay_type", "linear"),
                                 min_weight=float(self.config.get("opsa_min_weight", 0.1)),
-                                use_window_weighting=self.config.get("opsa_use_window_weighting", True),
-                                loss_agg_mode=self.config.get("opsa_loss_agg_mode", "token-mean"),
                             )
-                            opsa_coef = float(self.config.get("opsa_distillation_loss_coef", 1.0))
-                            policy_loss = opsa_coef * opsa_kl_loss
-                            metrics.update(opsa_metrics)
-                            continue
+                            weighted_kl = kl_per_token * window_weights
+                        else:
+                            weighted_kl = kl_per_token * response_mask.float()
+
+                        opsa_loss_agg = self.config.get("opsa_loss_agg_mode", "token-mean")
+                        mask = response_mask.float()
+                        if opsa_loss_agg == "token-mean":
+                            valid_tokens = mask.sum().clamp(min=1.0)
+                            policy_loss = (weighted_kl * mask).sum() / valid_tokens
+                        elif opsa_loss_agg == "seq-mean-token-sum":
+                            policy_loss = torch.mean(torch.sum(weighted_kl * mask, dim=-1))
+                        else:
+                            seq_lengths = mask.sum(dim=-1).clamp(min=1.0)
+                            policy_loss = torch.mean(torch.sum(weighted_kl * mask, dim=-1) / seq_lengths)
+
+                        opsa_coef = float(self.config.get("opsa_distillation_loss_coef", 1.0))
+                        loss = policy_loss * opsa_coef * loss_scale_factor
+                        loss.backward()
+
+                        with torch.no_grad():
+                            valid_tokens = mask.sum().clamp(min=1.0)
+                            kl_mean = (kl_per_token * mask).sum() / valid_tokens
+                            if opsa_use_window:
+                                window_mask = (window_weights >= 1.0 - 1e-6) & (mask > 0)
+                                kl_in_window = (kl_per_token * window_mask.float()).sum() / window_mask.float().sum().clamp(min=1.0)
+                            else:
+                                kl_in_window = kl_mean
+
+                        opsa_metrics = {
+                            "opsa/kl_mean": kl_mean.item(),
+                            "opsa/kl_in_window": kl_in_window.item(),
+                            "opsa/loss": policy_loss.detach().item(),
+                        }
+                        append_to_dict(metrics, opsa_metrics)
+                        continue
                     # ============ [EasyOPD:OPSA] End ============
 
                     policy_loss_fn = get_policy_loss_fn(loss_mode)

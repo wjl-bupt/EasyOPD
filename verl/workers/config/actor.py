@@ -220,6 +220,17 @@ class ActorConfig(BaseConfig):
     opsa_use_window_weighting: bool = True
     opsa_distillation_loss_coef: float = 1.0
     opsa_loss_agg_mode: str = "token-mean"
+    opsa_harmful_context: str = (
+        "You are a helpful and safe AI assistant. When you encounter a harmful, "
+        "dangerous, or unethical request, you MUST refuse clearly and explain why. "
+        "Safety is your highest priority."
+    )
+    opsa_benign_context: str = (
+        "You are a helpful AI assistant. Respond to the user's request directly "
+        "and helpfully. Do not over-refuse safe and reasonable requests."
+    )
+    opsa_tfr_eval_frequency: int = 10
+    opsa_tfr_threshold: float = 0.8
     # ============ [EasyOPD:OPSA] End ============
 
     def __post_init__(self):
