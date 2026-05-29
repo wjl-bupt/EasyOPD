@@ -105,26 +105,35 @@ def compute_early_window_weights(
     # Tokens within window_size of response start get weight 1.0
     in_window = (response_positions > 0) & (response_positions <= window_size)
 
+    # Per-sample actual response length (number of valid response tokens).
+    # Using this for normalization avoids contamination from prompt/padding
+    # length (seq_len includes prompt + padding, which is irrelevant to the
+    # response-side decay). Shape: (B,).
+    resp_len = response_positions.max(dim=-1).values  # (B,)
+    # Per-sample max position beyond the early window; clamp to 1 to avoid
+    # division by zero when resp_len <= window_size (in that case all tokens
+    # are inside the window and decay_factor is unused for them).
+    # Shape: (B, 1) for broadcasting against (B, L).
+    max_beyond = (resp_len - window_size).clamp(min=1).float().unsqueeze(-1)  # (B, 1)
+
     if decay_type == "step":
         # Hard cutoff: full weight in window, min_weight outside
         weights = torch.where(in_window, torch.ones_like(response_mask, dtype=torch.float32),
                               torch.full_like(response_mask, min_weight, dtype=torch.float32))
     elif decay_type == "linear":
-        # Linear decay from 1.0 at window boundary to min_weight at end
-        # Normalized position beyond window: 0 at boundary, 1 at seq_len
+        # Linear decay from 1.0 at window boundary to min_weight at each
+        # sample's own response end. Normalized per-sample so that different
+        # prompt/response lengths within the same batch get independent decay
+        # rates rather than sharing a global seq_len-based slope.
         beyond_window_pos = (response_positions - window_size).clamp(min=0).float()
-        max_beyond = (seq_len - window_size)
-        if max_beyond > 0:
-            decay_factor = 1.0 - (1.0 - min_weight) * (beyond_window_pos / max_beyond)
-        else:
-            decay_factor = torch.ones_like(beyond_window_pos)
+        decay_factor = 1.0 - (1.0 - min_weight) * (beyond_window_pos / max_beyond)
         weights = torch.where(in_window, torch.ones_like(decay_factor), decay_factor)
     elif decay_type == "exponential":
         # Exponential decay: weight = exp(-alpha * (pos - window_size))
-        # Calibrated so weight at seq_len = min_weight
+        # Calibrated per-sample so the weight at each sample's own response
+        # end equals min_weight, independent of padded seq_len.
         beyond_window_pos = (response_positions - window_size).clamp(min=0).float()
-        max_beyond = float(seq_len - window_size) if seq_len > window_size else 1.0
-        alpha = -torch.log(torch.tensor(min_weight)) / max_beyond
+        alpha = -torch.log(torch.tensor(min_weight, device=device)) / max_beyond  # (B, 1)
         decay_factor = torch.exp(-alpha * beyond_window_pos)
         weights = torch.where(in_window, torch.ones_like(decay_factor), decay_factor)
     else:

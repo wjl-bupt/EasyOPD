@@ -701,6 +701,27 @@ class DataParallelPPOActor(BasePPOActor):
                         # Equivalent to token-level forward KL contribution for the chosen token.
                         kl_per_token = (teacher_log_probs.exp() * (teacher_log_probs - student_log_probs)).clamp(min=0.0)
 
+                        # ---- opsa_temperature handling ----
+                        # NOTE: Standard KD temperature scaling operates on full-vocab logits
+                        # (logits / T -> softmax) before computing KL. In this training path we
+                        # only have per-chosen-token scalar log-probs (log p(y_t | y_<t)) for both
+                        # teacher and student, NOT the full vocabulary distribution, so we cannot
+                        # perform the canonical temperature softening of the distributions here.
+                        #
+                        # As a pragmatic surrogate we treat opsa_temperature as a direct scaling
+                        # factor on the per-token KL contribution: a higher T attenuates the
+                        # distillation signal (smoother / weaker pull toward the teacher), and a
+                        # lower T amplifies it -- mirroring the qualitative effect of temperature
+                        # in classical KD, while remaining mathematically equivalent (up to a
+                        # constant) to adjusting `opsa_distillation_loss_coef`. Users who need
+                        # true logits-level temperature scaling should implement it where the
+                        # full-vocab logits are still available (e.g. inside the forward pass).
+                        # When opsa_temperature == 1.0 (default) this is a no-op and preserves the
+                        # original behaviour exactly.
+                        opsa_temperature = float(self.config.get("opsa_temperature", 1.0))
+                        if opsa_temperature != 1.0:
+                            kl_per_token = kl_per_token / opsa_temperature
+
                         opsa_use_window = self.config.get("opsa_use_window_weighting", True)
                         if opsa_use_window:
                             window_weights = compute_early_window_weights(
