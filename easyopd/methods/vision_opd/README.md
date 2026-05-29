@@ -8,6 +8,7 @@ which only sees the original image. This enables the student to learn fine-grain
 without requiring additional annotations at inference time.
 
 **Paper:** https://arxiv.org/abs/2605.18740
+**Code:** https://github.com/VisionOPD/Vision-OPD
 
 **Key Features:**
 - **Self-Distillation with EMA Teacher**: Teacher model is an EMA copy of the student, updated after each step

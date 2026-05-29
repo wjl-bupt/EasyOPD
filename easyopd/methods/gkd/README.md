@@ -11,7 +11,6 @@ Divergence (JSD).
 
 **Paper:** [On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes](https://arxiv.org/abs/2306.13649)
 **Venue:** ICLR 2024
-**Code:** https://github.com/shawnli/on-policy-distillation
 
 **Key Features:**
 - **On-Policy Sampling**: Student generates sequences, avoiding distribution mismatch

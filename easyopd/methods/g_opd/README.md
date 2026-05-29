@@ -7,6 +7,7 @@ Building on G-OPD, **ExOPD** (On-Policy Distillation with Reward Extrapolation) 
 in both same-size and strong-to-weak distillation settings.
 
 **Paper:** https://arxiv.org/abs/2602.12125
+**Code:** https://github.com/RUCBM/G-OPD
 
 **Key Features:**
 - **Reward Scaling (λ):** Controls the strength of teacher signal (λ=1.0: OPD, λ>1.0: ExOPD)
