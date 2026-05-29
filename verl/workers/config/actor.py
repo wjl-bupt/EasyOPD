@@ -211,6 +211,17 @@ class ActorConfig(BaseConfig):
     self_distillation: SelfDistillationConfig = field(default_factory=SelfDistillationConfig)
     # ============ [EasyOPD:Vision-OPD] End ============
 
+    # ============ [EasyOPD:OPSA] On-Policy Self-Distillation for Safety Alignment ============
+    opsa_enable: bool = False
+    opsa_temperature: float = 1.0
+    opsa_window_size: int = 32
+    opsa_decay_type: str = "linear"  # Options: linear, step, exponential
+    opsa_min_weight: float = 0.1
+    opsa_use_window_weighting: bool = True
+    opsa_distillation_loss_coef: float = 1.0
+    opsa_loss_agg_mode: str = "token-mean"
+    # ============ [EasyOPD:OPSA] End ============
+
     def __post_init__(self):
         """Validate actor configuration parameters."""
         assert self.strategy != MISSING

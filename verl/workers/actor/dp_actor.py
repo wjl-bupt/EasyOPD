@@ -430,6 +430,15 @@ class DataParallelPPOActor(BasePPOActor):
                 select_keys.append("kl_topk_indices")
         # ============ [EasyOPD:OPCD] End ============
 
+        # ============ [EasyOPD:OPSA] Include teacher logits for self-distillation ============
+        opsa_enabled = self.config.get("opsa_enable", False)
+        if opsa_enabled:
+            if "opsa_teacher_logits" in data.batch.keys():
+                select_keys.append("opsa_teacher_logits")
+            if "opsa_query_type" in data.batch.keys():
+                select_keys.append("opsa_query_type")
+        # ============ [EasyOPD:OPSA] End ============
+
         data = data.select(batch_keys=select_keys, non_tensor_batch_keys=non_tensor_select_keys)
 
         # Split to make minibatch iterator for updating the actor
@@ -670,6 +679,33 @@ class DataParallelPPOActor(BasePPOActor):
                         append_to_dict(metrics, micro_batch_metrics)
                         continue  # Skip the normal loss path below
                     # ============ [EasyOPD:OPCD] End ============
+
+                    # ============ [EasyOPD:OPSA] On-Policy Self-Distillation loss ============
+                    opsa_enabled = self.config.get("opsa_enable", False)
+                    if opsa_enabled and "opsa_teacher_logits" in model_inputs:
+                        from easyopd.methods.opsa.core import opsa_loss
+
+                        teacher_logits = model_inputs["opsa_teacher_logits"]
+                        # Get student logits from current forward pass
+                        student_logits = model_output.logits if hasattr(model_output, 'logits') else None
+
+                        if student_logits is not None:
+                            opsa_kl_loss, opsa_metrics = opsa_loss(
+                                student_logits=student_logits,
+                                teacher_logits=teacher_logits,
+                                response_mask=response_mask,
+                                temperature=float(self.config.get("opsa_temperature", 1.0)),
+                                window_size=int(self.config.get("opsa_window_size", 32)),
+                                decay_type=self.config.get("opsa_decay_type", "linear"),
+                                min_weight=float(self.config.get("opsa_min_weight", 0.1)),
+                                use_window_weighting=self.config.get("opsa_use_window_weighting", True),
+                                loss_agg_mode=self.config.get("opsa_loss_agg_mode", "token-mean"),
+                            )
+                            opsa_coef = float(self.config.get("opsa_distillation_loss_coef", 1.0))
+                            policy_loss = opsa_coef * opsa_kl_loss
+                            metrics.update(opsa_metrics)
+                            continue
+                    # ============ [EasyOPD:OPSA] End ============
 
                     policy_loss_fn = get_policy_loss_fn(loss_mode)
                     pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = policy_loss_fn(

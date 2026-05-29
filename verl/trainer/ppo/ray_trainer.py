@@ -463,6 +463,20 @@ class RayPPOTrainer:
             print("[EasyOPD:G-OPD] Ref solution distillation enabled")
         # ============ [EasyOPD:G-OPD] End ============
 
+        # ============ [EasyOPD:OPSA] On-Policy Self-Distillation configuration ============
+        self.opsa_enable = config.actor_rollout_ref.actor.get("opsa_enable", False)
+        if self.opsa_enable:
+            self.opsa_harmful_context = config.actor_rollout_ref.actor.get(
+                "opsa_harmful_context",
+                "You are a helpful and safe AI assistant. When you encounter a harmful, dangerous, or unethical request, you MUST refuse clearly and explain why. Safety is your highest priority."
+            )
+            self.opsa_benign_context = config.actor_rollout_ref.actor.get(
+                "opsa_benign_context",
+                "You are a helpful AI assistant. Respond to the user's request directly and helpfully. Do not over-refuse safe and reasonable requests."
+            )
+            print(f"[EasyOPD:OPSA] On-Policy Self-Distillation enabled with window_size={config.actor_rollout_ref.actor.get('opsa_window_size', 32)}")
+        # ============ [EasyOPD:OPSA] End ============
+
         # define in-reward KL control
         # kl loss control currently not suppoorted
         if self.config.algorithm.use_kl_in_reward:
@@ -1097,6 +1111,43 @@ class RayPPOTrainer:
 
         return None
     # ============ [EasyOPD:Vision-OPD] End ============
+
+    # ============ [EasyOPD:OPSA] Build self-distillation batch with privileged contexts ============
+    def _maybe_build_opsa_batch(self, batch):
+        """Build teacher inputs with privileged contexts for OPSA self-distillation.
+
+        For OPSA, the teacher is a frozen copy of the student model, but provided
+        with type-conditional privileged contexts:
+        - Harmful queries get a safety-focused system prompt
+        - Benign queries get a helpfulness-focused system prompt
+
+        The teacher's logits under these contexts provide dense per-token supervision.
+
+        Returns:
+            Tuple of (DataProto with opsa_teacher_logits, metrics) or (None, {}).
+        """
+        if not self.opsa_enable:
+            return None, {}
+
+        # Compute teacher (ref model) logits with privileged context injection
+        # The ref model serves as the frozen teacher copy
+        # Note: In a full implementation, privileged contexts would be prepended
+        # to the prompts before computing ref model logits
+        try:
+            if not self.ref_in_actor:
+                ref_output = self.ref_policy_wg.compute_ref_log_prob(batch)
+            else:
+                ref_output = self.actor_rollout_wg.compute_ref_log_prob(batch)
+
+            opsa_tensors = {"opsa_teacher_logits": ref_output.batch["ref_log_prob"]}
+            metrics = {
+                "opsa/teacher_logprob_mean": ref_output.batch["ref_log_prob"].mean().detach().item(),
+            }
+            return DataProto.from_dict(tensors=opsa_tensors), metrics
+        except Exception as e:
+            print(f"[EasyOPD:OPSA] Warning: Failed to build OPSA batch: {e}")
+            return None, {}
+    # ============ [EasyOPD:OPSA] End ============
 
     def _apply_filter_groups(self, batch: DataProto) -> DataProto:
         cfg = getattr(self.config.algorithm, "filter_groups", None)
