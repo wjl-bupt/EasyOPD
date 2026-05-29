@@ -642,6 +642,189 @@ class RayPPOTrainer:
 
         return stats
 
+    # ============ [EasyOPD:OPCD] Build context distillation batch ============
+    def _maybe_build_opcd_batch(self, batch):
+        """Build experience-augmented teacher inputs for OPCD context distillation.
+
+        In OPCD's consolidate stage:
+        1. Load experience from file (or from batch metadata)
+        2. Inject experience into prompts to create teacher prompts
+        3. Tokenize teacher prompts + student responses
+        4. Compute teacher (ref model) log-probs on the augmented prompts
+        5. Return exp_log_probs for KL loss computation in dp_actor
+
+        Returns:
+            Optional tuple of (DataProto with exp_log_probs, metrics dict), or None.
+        """
+        from verl import DataProto
+        from easyopd.methods.opcd.core import build_experience_prompt, truncate_experience
+        import json
+        import os
+
+        experience_path = getattr(self.config.trainer, "experience_path", None)
+        if experience_path is None:
+            return None
+
+        train_system_prompt = getattr(self.config.trainer, "train_system_prompt", False)
+        experience_max_length = getattr(self.config.trainer, "experience_max_length", 16384)
+
+        # Load experiences from file
+        experiences = {}
+        if experience_path and os.path.exists(experience_path):
+            with open(experience_path, "r") as f:
+                exp_data = json.load(f)
+            if isinstance(exp_data, dict):
+                experiences = exp_data
+            elif isinstance(exp_data, list):
+                for item in exp_data:
+                    if isinstance(item, dict) and "prompt" in item and "experience" in item:
+                        experiences[item["prompt"]] = item["experience"]
+
+        batch_size = batch.batch["input_ids"].shape[0]
+        device = batch.batch["input_ids"].device
+
+        # Build teacher prompts with experience injected
+        has_experience_count = 0
+        exp_prompts = []
+
+        for i in range(batch_size):
+            raw_prompt = batch.non_tensor_batch.get("raw_prompt", [None] * batch_size)[i]
+            prompt_text = ""
+            if raw_prompt is not None:
+                if isinstance(raw_prompt, (list, tuple)):
+                    # Chat messages format
+                    for msg in raw_prompt:
+                        if isinstance(msg, dict) and msg.get("role") == "user":
+                            content = msg.get("content", "")
+                            if isinstance(content, str):
+                                prompt_text = content
+                            break
+                elif isinstance(raw_prompt, str):
+                    prompt_text = raw_prompt
+
+            # Find matching experience
+            experience = ""
+            if prompt_text in experiences:
+                experience = experiences[prompt_text]
+            elif experiences:
+                # Try partial match or use first available
+                for key in experiences:
+                    if key in prompt_text or prompt_text in key:
+                        experience = experiences[key]
+                        break
+
+            if experience:
+                experience = truncate_experience(
+                    experience, max_tokens=experience_max_length, tokenizer=self.tokenizer
+                )
+                has_experience_count += 1
+
+            # Build teacher messages with experience
+            if raw_prompt is not None and isinstance(raw_prompt, (list, tuple)):
+                teacher_messages = build_experience_prompt(
+                    raw_prompt, experience,
+                    mode="system_prompt" if train_system_prompt else "user_content",
+                    train_system_prompt=train_system_prompt,
+                )
+            else:
+                teacher_messages = [{"role": "user", "content": prompt_text}]
+                if experience:
+                    teacher_messages = build_experience_prompt(
+                        teacher_messages, experience,
+                        mode="system_prompt" if train_system_prompt else "user_content",
+                        train_system_prompt=train_system_prompt,
+                    )
+
+            exp_prompts.append(teacher_messages)
+
+        # Tokenize teacher prompts and compute ref model log-probs
+        # For now, we pass the experience info as metadata; the actual ref log-prob
+        # computation happens via the existing ref_policy_wg.compute_ref_log_prob path
+        # We need to rebuild input_ids with experience-augmented prompts
+
+        response_mask = batch.batch["response_mask"]
+        responses = batch.batch["responses"]
+
+        teacher_input_ids_list = []
+        teacher_attention_mask_list = []
+        teacher_position_ids_list = []
+
+        max_prompt_len = getattr(self.config.data, "max_prompt_length", 17408)
+
+        for i in range(batch_size):
+            # Tokenize teacher prompt
+            apply_kwargs = {}
+            if hasattr(self.config.data, "apply_chat_template_kwargs"):
+                apply_kwargs = dict(self.config.data.get("apply_chat_template_kwargs", {}) or {})
+
+            processing_class = getattr(self, "processor", None) or self.tokenizer
+            raw_prompt_text = processing_class.apply_chat_template(
+                exp_prompts[i],
+                tokenize=False,
+                add_generation_prompt=True,
+                **apply_kwargs,
+            )
+
+            teacher_prompt_output = self.tokenizer(
+                raw_prompt_text,
+                return_tensors="pt",
+                add_special_tokens=False,
+                truncation=True,
+                max_length=max_prompt_len,
+            )
+            prompt_ids = teacher_prompt_output["input_ids"].squeeze(0)
+            prompt_mask = teacher_prompt_output["attention_mask"].squeeze(0)
+
+            # Concat with student response
+            valid_response_len = int(response_mask[i].sum().item())
+            response_ids = responses[i, :valid_response_len]
+            teacher_ids = torch.cat([prompt_ids, response_ids], dim=0)
+            teacher_mask = torch.cat([prompt_mask, torch.ones(valid_response_len, dtype=torch.long)], dim=0)
+            teacher_pos = torch.arange(len(teacher_ids), dtype=torch.long)
+
+            teacher_input_ids_list.append(teacher_ids)
+            teacher_attention_mask_list.append(teacher_mask)
+            teacher_position_ids_list.append(teacher_pos)
+
+        # Pad to same length
+        import torch
+        pad_token_id = self.tokenizer.pad_token_id or 0
+        teacher_input_ids = torch.nn.utils.rnn.pad_sequence(
+            teacher_input_ids_list, batch_first=True, padding_value=pad_token_id,
+        ).to(device)
+        teacher_attention_mask = torch.nn.utils.rnn.pad_sequence(
+            teacher_attention_mask_list, batch_first=True, padding_value=0,
+        ).to(device)
+        teacher_position_ids = torch.nn.utils.rnn.pad_sequence(
+            teacher_position_ids_list, batch_first=True, padding_value=0,
+        ).to(device)
+
+        # Compute ref model log-probs on experience-augmented inputs
+        # We create a temporary batch for the ref model
+        exp_batch = DataProto.from_dict(tensors={
+            "input_ids": teacher_input_ids,
+            "attention_mask": teacher_attention_mask,
+            "position_ids": teacher_position_ids,
+            "responses": batch.batch["responses"],
+            "response_mask": batch.batch["response_mask"],
+        })
+
+        # Use ref policy to compute log probs
+        assert self.use_reference_policy, "OPCD requires reference policy for experience log-prob computation"
+        exp_log_prob_output = self.ref_policy_wg.compute_ref_log_prob(exp_batch)
+
+        exp_log_probs = exp_log_prob_output.batch["ref_log_prob"]
+
+        metrics = {
+            "opcd/experience_coverage": has_experience_count / max(batch_size, 1),
+            "opcd/exp_log_prob_mean": exp_log_probs.mean().detach().item(),
+        }
+
+        return DataProto.from_dict(tensors={
+            "exp_log_probs": exp_log_probs,
+        }), metrics
+    # ============ [EasyOPD:OPCD] End ============
+
     # ============ [EasyOPD:Vision-OPD] Build self-distillation batch ============
     def _maybe_build_vision_opd_batch(
         self,
@@ -1844,6 +2027,20 @@ class RayPPOTrainer:
                                 batch = batch.union(vopd_batch_data)
                                 metrics.update(vopd_metrics)
                         # ============ [EasyOPD:Vision-OPD] End ============
+
+                        # ============ [EasyOPD:OPCD] Context distillation - experience injection ============
+                        opcd_stage = getattr(self.config.trainer, "stage", None)
+                        if opcd_stage == "consolidate":
+                            opcd_result = self._maybe_build_opcd_batch(batch)
+                            if opcd_result is not None:
+                                opcd_batch_data, opcd_metrics = opcd_result
+                                batch = batch.union(opcd_batch_data)
+                                metrics.update(opcd_metrics)
+                                batch.meta_info["stage_merge"] = True
+                                batch.meta_info["on_policy_merge"] = getattr(
+                                    self.config.trainer, "on_policy_merge", True
+                                )
+                        # ============ [EasyOPD:OPCD] End ============
 
                         # update actor
                         with marked_timer("update_actor", timing_raw, color="red"):

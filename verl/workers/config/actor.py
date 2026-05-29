@@ -192,6 +192,11 @@ class ActorConfig(BaseConfig):
     use_torch_compile: bool = True
     kl_loss_coef: float = 0.001
     kl_loss_type: str = "low_var_kl"
+    # ============ [EasyOPD:OPCD] KL distillation config ============
+    kl_topk: int = 0  # If > 0, use top-k logits for full KL computation (memory efficient)
+    kl_renorm_topk: bool = False  # Whether to renormalize top-k log-probs before KL
+    profile_kl: bool = False  # Whether to profile KL computation
+    # ============ [EasyOPD:OPCD] End ============
     ppo_epochs: int = 1
     shuffle: bool = False
     checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
