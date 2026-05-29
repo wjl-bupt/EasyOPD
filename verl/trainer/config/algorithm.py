@@ -17,7 +17,7 @@ from typing import Any, Optional
 
 from verl.base_config import BaseConfig
 
-__all__ = ["AlgoConfig", "FilterGroupsConfig", "KLControlConfig", "TokenKLRegConfig"]
+__all__ = ["AlgoConfig", "FilterGroupsConfig", "KLControlConfig", "TokenKLRegConfig", "RolloutCorrectionConfig"]
 
 
 @dataclass
@@ -112,3 +112,33 @@ class AlgoConfig(BaseConfig):
     critique_top_p: float = 1.0
     use_ref_solution_distillation: bool = False
     # ============ [EasyOPD:G-OPD] End ============
+    # ============ [EasyOPD:Vision-OPD] Rollout correction configuration ============
+    rollout_correction: Optional["RolloutCorrectionConfig"] = None
+    # ============ [EasyOPD:Vision-OPD] End ============
+
+
+# ============ [EasyOPD:Vision-OPD] Rollout correction config ============
+@dataclass
+class RolloutCorrectionConfig(BaseConfig):
+    """Configuration for Rollout Correction (addresses off-policy issues in RL training).
+
+    Rollout Correction handles off-policiness from multiple sources:
+    1. Policy mismatch: Rollout policy (e.g., vLLM BF16) vs Training policy (e.g., FSDP FP32)
+    2. Model update staleness: Rollout data collected from older policy checkpoints
+
+    Args:
+        rollout_is (Optional[str]): IS weight aggregation level.
+            - None: No IS weights
+            - "token": Per-token IS weights (low variance, biased)
+            - "sequence": Per-sequence IS weights (unbiased, high variance)
+        rollout_is_threshold (float): Upper threshold for IS weight truncation.
+        rollout_rs (Optional[str]): Rejection sampling mode.
+        rollout_rs_threshold (Optional[str | float]): Threshold for rejection sampling.
+    """
+
+    rollout_is: Optional[str] = "sequence"
+    rollout_is_threshold: float = 2.0
+    rollout_is_batch_normalize: bool = False
+    rollout_rs: Optional[str] = None
+    rollout_rs_threshold: Optional[Any] = None
+# ============ [EasyOPD:Vision-OPD] End ============
