@@ -40,21 +40,30 @@ NNODES="${NNODES:-1}"
 # Training Hyperparameters
 TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-128}"
 MINI_BATCH_SIZE="${MINI_BATCH_SIZE:-128}"
-ACTOR_LR="${ACTOR_LR:-5e-6}"
+ACTOR_LR="${ACTOR_LR:-1e-5}"
 TOTAL_EPOCHS="${TOTAL_EPOCHS:-3}"
 TOTAL_STEPS="${TOTAL_STEPS:-200}"
 
-# OPSA-Specific Parameters
+# OPSA-Specific Parameters (aligned with original OPSA distillation_safety.yaml)
 OPSA_TEMPERATURE="${OPSA_TEMPERATURE:-1.0}"
 OPSA_WINDOW_SIZE="${OPSA_WINDOW_SIZE:-32}"
 OPSA_DECAY_TYPE="${OPSA_DECAY_TYPE:-linear}"
 OPSA_MIN_WEIGHT="${OPSA_MIN_WEIGHT:-0.1}"
 OPSA_LOSS_COEF="${OPSA_LOSS_COEF:-1.0}"
+OPSA_KL_TYPE="${OPSA_KL_TYPE:-mixed}"
+OPSA_MIXED_KL_WEIGHT="${OPSA_MIXED_KL_WEIGHT:-0.5}"
+OPSA_TOPK_LOGITS_K="${OPSA_TOPK_LOGITS_K:-512}"
 
-# Rollout Configuration
+# Optimizer / scheduler (original OPSA: lr=1e-5, weight_decay=0.01, max_grad_norm=1.0,
+# LinearLR warmup over 10 steps from 0.1 -> 1.0, then ConstantLR)
+WEIGHT_DECAY="${WEIGHT_DECAY:-0.01}"
+GRAD_CLIP="${GRAD_CLIP:-1.0}"
+LR_WARMUP_STEPS="${LR_WARMUP_STEPS:-10}"
+
+# Rollout Configuration (original OPSA: max_total_sequence_length=4096, temperature=0.6)
 MAX_PROMPT_LENGTH="${MAX_PROMPT_LENGTH:-1024}"
-MAX_RESPONSE_LENGTH="${MAX_RESPONSE_LENGTH:-1024}"
-ROLLOUT_TEMPERATURE="${ROLLOUT_TEMPERATURE:-1.0}"
+MAX_RESPONSE_LENGTH="${MAX_RESPONSE_LENGTH:-4096}"
+ROLLOUT_TEMPERATURE="${ROLLOUT_TEMPERATURE:-0.6}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.8}"
 
 echo "============================================"
@@ -79,6 +88,10 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.optim.lr=${ACTOR_LR} \
+    actor_rollout_ref.actor.optim.weight_decay=${WEIGHT_DECAY} \
+    actor_rollout_ref.actor.optim.lr_warmup_steps=${LR_WARMUP_STEPS} \
+    +actor_rollout_ref.actor.optim.warmup_style=constant \
+    actor_rollout_ref.actor.grad_clip=${GRAD_CLIP} \
     actor_rollout_ref.actor.ppo_mini_batch_size=${MINI_BATCH_SIZE} \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=8 \
     actor_rollout_ref.actor.use_kl_loss=False \
@@ -90,6 +103,9 @@ python3 -m verl.trainer.main_ppo \
     +actor_rollout_ref.actor.opsa_use_window_weighting=true \
     +actor_rollout_ref.actor.opsa_distillation_loss_coef=${OPSA_LOSS_COEF} \
     +actor_rollout_ref.actor.opsa_loss_agg_mode=token-mean \
+    +actor_rollout_ref.actor.opsa_kl_type=${OPSA_KL_TYPE} \
+    +actor_rollout_ref.actor.opsa_mixed_kl_weight=${OPSA_MIXED_KL_WEIGHT} \
+    +actor_rollout_ref.actor.opsa_topk_logits_k=${OPSA_TOPK_LOGITS_K} \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.temperature=${ROLLOUT_TEMPERATURE} \
     actor_rollout_ref.rollout.gpu_memory_utilization=${GPU_MEMORY_UTILIZATION} \

@@ -88,13 +88,37 @@ class DataParallelPPOActor(BasePPOActor):
         self.device_name = get_device_name()
 
     def _forward_micro_batch(
-        self, micro_batch, temperature, calculate_entropy=False
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        self, micro_batch, temperature, calculate_entropy=False,
+        opsa_topk_k=None,
+        opsa_gather_indices=None,
+    ):
         """
         Returns:
             entropy: # (bs, response_len)
             log_probs: # (bs, response_len)
+
+        When ``opsa_topk_k`` or ``opsa_gather_indices`` is provided (used for OPSA's
+        topk_logits_k full-vocab KL alignment), additionally returns a third element
+        ``opsa_extra`` (dict) with optional keys:
+            - ``topk_log_probs``: (bs, response_len, K) — top-K log-softmax values from this model.
+            - ``topk_indices``:   (bs, response_len, K) — corresponding vocab indices (int64).
+            - ``gathered_log_probs``: (bs, response_len, K) — log-softmax gathered at
+              ``opsa_gather_indices`` positions (used by the student to align with the
+              teacher's top-K vocab subset).
+        Falls back gracefully (``opsa_extra={}``) under ulysses SP / fused kernels /
+        rmpad which we currently do not support for top-K extraction; callers should
+        treat the absence of these keys as "use per-token mixed KL fallback".
         """
+        opsa_caller_requested_extra = (opsa_topk_k is not None) or (opsa_gather_indices is not None)
+        opsa_extra_requested = opsa_caller_requested_extra
+        opsa_extra: dict = {}
+        # OPSA top-K extraction is currently disabled under ulysses SP (rmpad+SP layout makes
+        # the gather/topk extraction non-trivial). Caller should use per-token mixed KL.
+        # We still honour the caller's 3-tuple return contract — just hand back an empty dict.
+        if opsa_extra_requested and self.use_ulysses_sp:
+            opsa_extra_requested = False
+            opsa_topk_k = None
+            opsa_gather_indices = None
         response_length = micro_batch["responses"].size(-1)
         multi_modal_inputs = {}
         if "multi_modal_inputs" in micro_batch.keys():
@@ -246,6 +270,58 @@ class DataParallelPPOActor(BasePPOActor):
                     entropy = full_entropy.squeeze(-1)[:, -response_length - 1 : -1]  # (bsz, response_length)
                 log_probs = full_log_probs.squeeze(-1)[:, -response_length - 1 : -1]  # (bsz, response_length)
 
+                # ============ [EasyOPD:OPSA] top-K logits extraction (rmpad, no SP) ============
+                # We already excluded use_ulysses_sp above; also skip when fused kernels
+                # are in use because the full-vocab logits are not available there.
+                if opsa_extra_requested and not self.use_fused_kernels:
+                    # Memory-efficient log-softmax via logsumexp: avoids materializing the
+                    # full (total_nnz, V) log-softmax tensor, which would be prohibitive for
+                    # vocab sizes >> response top-K (e.g. Qwen3 V~152k vs K=512).
+                    lse_rmpad = torch.logsumexp(logits_rmpad, dim=-1, keepdim=True)  # (total_nnz, 1)
+                    if opsa_topk_k is not None and opsa_topk_k > 0:
+                        tk = min(int(opsa_topk_k), logits_rmpad.size(-1))
+                        tv_rmpad_logits, ti_rmpad = torch.topk(logits_rmpad, k=tk, dim=-1)
+                        tv_rmpad = (tv_rmpad_logits - lse_rmpad).to(torch.float32)
+                        # pad_input expects (total_nnz, hidden_size) -> (bsz, seqlen, hidden_size)
+                        tv_full = pad_input(
+                            hidden_states=tv_rmpad,
+                            indices=indices,
+                            batch=batch_size,
+                            seqlen=seqlen,
+                        )
+                        ti_full = pad_input(
+                            hidden_states=ti_rmpad.to(tv_rmpad.dtype),
+                            indices=indices,
+                            batch=batch_size,
+                            seqlen=seqlen,
+                        )
+                        opsa_extra["topk_log_probs"] = tv_full[:, -response_length - 1 : -1, :]
+                        opsa_extra["topk_indices"] = ti_full[:, -response_length - 1 : -1, :].to(torch.int64)
+                    if opsa_gather_indices is not None:
+                        K_dim = opsa_gather_indices.size(-1)
+                        gi_full = torch.zeros(
+                            (batch_size, seqlen, K_dim),
+                            dtype=torch.int64,
+                            device=logits_rmpad.device,
+                        )
+                        gi_full[:, -response_length - 1 : -1, :] = opsa_gather_indices.to(
+                            device=logits_rmpad.device, dtype=torch.int64
+                        )
+                        # Unpad to rmpad layout (total_nnz, K)
+                        gi_rmpad = index_first_axis(
+                            rearrange(gi_full, "b s k -> (b s) k"), indices
+                        )
+                        gathered_logits_rmpad = logits_rmpad.gather(dim=-1, index=gi_rmpad)
+                        gathered_rmpad = (gathered_logits_rmpad - lse_rmpad).to(torch.float32)
+                        gathered_full = pad_input(
+                            hidden_states=gathered_rmpad,
+                            indices=indices,
+                            batch=batch_size,
+                            seqlen=seqlen,
+                        )
+                        opsa_extra["gathered_log_probs"] = gathered_full[:, -response_length - 1 : -1, :]
+                # ============ [EasyOPD:OPSA] End ============
+
             else:  # not using rmpad and no ulysses sp
                 extra_args = {}
                 if self.use_fused_kernels:
@@ -277,6 +353,24 @@ class DataParallelPPOActor(BasePPOActor):
                         else:
                             entropy = torch.utils.checkpoint.checkpoint(verl_F.entropy_from_logits, logits)
 
+                    # ============ [EasyOPD:OPSA] top-K logits extraction (non-rmpad) ============
+                    if opsa_extra_requested:
+                        # Memory-efficient log-softmax via logsumexp constant subtraction;
+                        # avoids materializing the full (B, T, V) log-softmax tensor.
+                        lse = torch.logsumexp(logits, dim=-1, keepdim=True)  # (B, T, 1)
+                        if opsa_topk_k is not None and opsa_topk_k > 0:
+                            tk = min(int(opsa_topk_k), logits.size(-1))
+                            tv_logits, ti = torch.topk(logits, k=tk, dim=-1)
+                            opsa_extra["topk_log_probs"] = (tv_logits - lse).to(torch.float32)
+                            opsa_extra["topk_indices"] = ti.to(torch.int64)
+                        if opsa_gather_indices is not None:
+                            gi = opsa_gather_indices.to(device=logits.device, dtype=torch.int64)
+                            gathered_logits = logits.gather(dim=-1, index=gi)
+                            opsa_extra["gathered_log_probs"] = (gathered_logits - lse).to(torch.float32)
+                    # ============ [EasyOPD:OPSA] End ============
+
+            if opsa_caller_requested_extra:
+                return entropy, log_probs, opsa_extra
             return entropy, log_probs
 
     def _optimizer_step(self):
@@ -322,6 +416,9 @@ class DataParallelPPOActor(BasePPOActor):
         micro_batch_size = data.meta_info["micro_batch_size"]
         temperature = data.meta_info["temperature"]  # temperature must be in the data.meta_info to avoid silent error
         use_dynamic_bsz = data.meta_info["use_dynamic_bsz"]
+        # ============ [EasyOPD:OPSA] propagate top-K request via meta_info ============
+        opsa_topk_k = data.meta_info.get("opsa_topk_k", None)
+        # ============ [EasyOPD:OPSA] End ============
         has_multi_modal_inputs = "multi_modal_inputs" in data.non_tensor_batch.keys()
         select_keys = ["responses", "input_ids", "attention_mask", "position_ids"]
         non_tensor_select_keys = ["multi_modal_inputs"] if has_multi_modal_inputs else []
@@ -336,13 +433,24 @@ class DataParallelPPOActor(BasePPOActor):
 
         log_probs_lst = []
         entropy_lst = []
+        opsa_topk_values_lst = []
+        opsa_topk_indices_lst = []
         for micro_batch in micro_batches:
             micro_batch = micro_batch.to(get_device_id())
             model_inputs = {**micro_batch.batch, **micro_batch.non_tensor_batch}
             with torch.no_grad():
-                entropy, log_probs = self._forward_micro_batch(
-                    model_inputs, temperature=temperature, calculate_entropy=calculate_entropy
-                )
+                if opsa_topk_k is not None and opsa_topk_k > 0:
+                    entropy, log_probs, opsa_extra = self._forward_micro_batch(
+                        model_inputs, temperature=temperature, calculate_entropy=calculate_entropy,
+                        opsa_topk_k=int(opsa_topk_k),
+                    )
+                    if "topk_log_probs" in opsa_extra:
+                        opsa_topk_values_lst.append(opsa_extra["topk_log_probs"])
+                        opsa_topk_indices_lst.append(opsa_extra["topk_indices"])
+                else:
+                    entropy, log_probs = self._forward_micro_batch(
+                        model_inputs, temperature=temperature, calculate_entropy=calculate_entropy
+                    )
             log_probs_lst.append(log_probs)
             if calculate_entropy:
                 entropy_lst.append(entropy)
@@ -352,10 +460,26 @@ class DataParallelPPOActor(BasePPOActor):
         if calculate_entropy:
             entropys = torch.concat(entropy_lst, dim=0)
 
+        # ============ [EasyOPD:OPSA] aggregate top-K outputs across micro batches ============
+        opsa_topk_values = None
+        opsa_topk_indices = None
+        if opsa_topk_values_lst and len(opsa_topk_values_lst) == len(log_probs_lst):
+            opsa_topk_values = torch.concat(opsa_topk_values_lst, dim=0)
+            opsa_topk_indices = torch.concat(opsa_topk_indices_lst, dim=0)
+        # ============ [EasyOPD:OPSA] End ============
+
         if use_dynamic_bsz:
             log_probs = restore_dynamic_batch(log_probs, batch_idx_list)
             if calculate_entropy:
                 entropys = restore_dynamic_batch(entropys, batch_idx_list)
+            if opsa_topk_values is not None:
+                opsa_topk_values = restore_dynamic_batch(opsa_topk_values, batch_idx_list)
+                opsa_topk_indices = restore_dynamic_batch(opsa_topk_indices, batch_idx_list)
+
+        # Stash OPSA top-K outputs on the function for the calling worker to retrieve.
+        # We avoid changing the public return type to keep backward compatibility.
+        self._last_opsa_topk_log_probs = opsa_topk_values
+        self._last_opsa_topk_indices = opsa_topk_indices
 
         return log_probs, entropys
 
@@ -435,6 +559,12 @@ class DataParallelPPOActor(BasePPOActor):
         if opsa_enabled:
             if "opsa_teacher_log_probs" in data.batch.keys():
                 select_keys.append("opsa_teacher_log_probs")
+            # ============ [EasyOPD:OPSA] include top-K teacher distributions when present ============
+            if "opsa_teacher_topk_log_probs" in data.batch.keys():
+                select_keys.append("opsa_teacher_topk_log_probs")
+            if "opsa_teacher_topk_indices" in data.batch.keys():
+                select_keys.append("opsa_teacher_topk_indices")
+            # ============ [EasyOPD:OPSA] End ============
         # ============ [EasyOPD:OPSA] End ============
 
         data = data.select(batch_keys=select_keys, non_tensor_batch_keys=non_tensor_select_keys)
@@ -480,9 +610,27 @@ class DataParallelPPOActor(BasePPOActor):
                     calculate_entropy = False
                     if entropy_coeff != 0:
                         calculate_entropy = True
-                    entropy, log_prob = self._forward_micro_batch(
-                        model_inputs, temperature=temperature, calculate_entropy=calculate_entropy
-                    )
+                    # ============ [EasyOPD:OPSA] gather student log-probs at teacher top-K indices ============
+                    # When the trainer attached `opsa_teacher_topk_indices`, ask the forward
+                    # to additionally return the student's log-softmax values at exactly those
+                    # vocabulary positions, so we can compute a top-K Mixed KL aligned with
+                    # the teacher distribution (mirrors original OPSA's topk_logits_k=512).
+                    opsa_gather_indices = None
+                    if self.config.get("opsa_enable", False) and "opsa_teacher_topk_indices" in model_inputs:
+                        opsa_gather_indices = model_inputs["opsa_teacher_topk_indices"]
+
+                    if opsa_gather_indices is not None:
+                        entropy, log_prob, opsa_extra = self._forward_micro_batch(
+                            model_inputs, temperature=temperature, calculate_entropy=calculate_entropy,
+                            opsa_gather_indices=opsa_gather_indices,
+                        )
+                        student_topk_log_probs = opsa_extra.get("gathered_log_probs", None)
+                    else:
+                        entropy, log_prob = self._forward_micro_batch(
+                            model_inputs, temperature=temperature, calculate_entropy=calculate_entropy
+                        )
+                        student_topk_log_probs = None
+                    # ============ [EasyOPD:OPSA] End ============
 
                     if on_policy:
                         old_log_prob = log_prob.detach()
@@ -699,10 +847,41 @@ class DataParallelPPOActor(BasePPOActor):
                         teacher_log_probs = model_inputs["opsa_teacher_log_probs"]  # (B, resp_len)
                         student_log_probs = log_prob  # (B, resp_len), from _forward_micro_batch above
 
-                        # Per-token KL surrogate: -exp(teacher_lp) * (teacher_lp - student_lp)
-                        # = exp(teacher_lp) * (student_lp - teacher_lp) negated
-                        # Equivalent to token-level forward KL contribution for the chosen token.
-                        kl_per_token = (teacher_log_probs.exp() * (teacher_log_probs - student_log_probs)).clamp(min=0.0)
+                        opsa_kl_type = str(self.config.get("opsa_kl_type", "mixed")).lower()
+                        opsa_mixed_kl_weight = float(self.config.get("opsa_mixed_kl_weight", 0.5))
+
+                        # ---- Top-K Mixed KL (preferred when teacher top-K is available) ----
+                        # When the teacher provided its top-K log-softmax over the vocabulary
+                        # AND the student's forward produced log-softmax gathered at those
+                        # same indices, we can compute a faithful top-K Mixed KL that mirrors
+                        # the original OPSA implementation (loss_fn.kl_type="mixed",
+                        # mixed_kl_weight=0.5, topk_logits_k=512, zero_outside_topk=false).
+                        teacher_topk_lp = model_inputs.get("opsa_teacher_topk_log_probs", None)
+                        if teacher_topk_lp is not None and student_topk_log_probs is not None:
+                            # Both shape (B, resp_len, K). Compute KL summed over the K dim.
+                            teacher_topk_lp = teacher_topk_lp.to(student_topk_log_probs.dtype)
+                            t_p = teacher_topk_lp.exp()
+                            s_p = student_topk_log_probs.exp()
+                            forward_kl_topk = (t_p * (teacher_topk_lp - student_topk_log_probs)).sum(dim=-1)
+                            reverse_kl_topk = (s_p * (student_topk_log_probs - teacher_topk_lp)).sum(dim=-1)
+                            forward_kl = forward_kl_topk.clamp(min=0.0)
+                            reverse_kl = reverse_kl_topk.clamp(min=0.0)
+                        else:
+                            # ---- Fallback: per-token Mixed KL on chosen-token scalar log-probs ----
+                            # Forward KL surrogate: p_T(y_t) * (log p_T(y_t) - log p_S(y_t))
+                            forward_kl = (teacher_log_probs.exp() * (teacher_log_probs - student_log_probs)).clamp(min=0.0)
+                            # Reverse KL surrogate: p_S(y_t) * (log p_S(y_t) - log p_T(y_t))
+                            reverse_kl = (student_log_probs.exp() * (student_log_probs - teacher_log_probs)).clamp(min=0.0)
+
+                        if opsa_kl_type == "forward":
+                            kl_per_token = forward_kl
+                        elif opsa_kl_type == "reverse":
+                            kl_per_token = reverse_kl
+                        else:  # "mixed"
+                            kl_per_token = (
+                                opsa_mixed_kl_weight * forward_kl
+                                + (1.0 - opsa_mixed_kl_weight) * reverse_kl
+                            )
 
                         # ---- opsa_temperature handling ----
                         # NOTE: Standard KD temperature scaling operates on full-vocab logits

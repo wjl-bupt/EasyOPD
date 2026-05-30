@@ -853,10 +853,26 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         data.meta_info["temperature"] = self.config.rollout.temperature
         data.meta_info["max_token_len"] = self.config.ref.log_prob_max_token_len_per_gpu
         data.meta_info["use_dynamic_bsz"] = self.config.ref.log_prob_use_dynamic_bsz
+        # ============ [EasyOPD:OPSA] propagate opsa_topk_k for top-K teacher logits ============
+        # When the trainer sets data.meta_info["opsa_topk_k"] (an int > 0), the ref model
+        # additionally returns top-K log-probs / indices over the full vocabulary at every
+        # response position, used by the actor to compute a top-K Mixed KL aligned with the
+        # original OPSA distillation_safety.yaml (loss_fn.kl_type="mixed", topk_logits_k=512).
+        opsa_topk_k = data.meta_info.get("opsa_topk_k", None)
+        # ============ [EasyOPD:OPSA] End ============
         with self.ulysses_sharding_manager:
             data = data.to("cpu")  # data will to device with each micro batch on ref.compute_log_prob
             output, _ = self.ref_policy.compute_log_prob(data=data, calculate_entropy=False)
-            output = DataProto.from_dict(tensors={"ref_log_prob": output})
+            output_tensors = {"ref_log_prob": output}
+            # ============ [EasyOPD:OPSA] forward top-K outputs to the trainer ============
+            if opsa_topk_k is not None and opsa_topk_k > 0:
+                topk_values = getattr(self.ref_policy, "_last_opsa_topk_log_probs", None)
+                topk_indices = getattr(self.ref_policy, "_last_opsa_topk_indices", None)
+                if topk_values is not None and topk_indices is not None:
+                    output_tensors["ref_topk_log_probs"] = topk_values
+                    output_tensors["ref_topk_indices"] = topk_indices
+            # ============ [EasyOPD:OPSA] End ============
+            output = DataProto.from_dict(tensors=output_tensors)
 
         output = output.to("cpu")
 

@@ -1276,6 +1276,18 @@ class RayPPOTrainer:
                 "response_mask": teacher_response_mask,
             })
 
+            # ============ [EasyOPD:OPSA] request top-K teacher logits when configured ============
+            opsa_topk_k = None
+            try:
+                actor_cfg = self.config.actor_rollout_ref.actor
+                opsa_topk_k_cfg = actor_cfg.get("opsa_topk_logits_k", 0)
+                if opsa_topk_k_cfg is not None and int(opsa_topk_k_cfg) > 0:
+                    opsa_topk_k = int(opsa_topk_k_cfg)
+                    teacher_batch.meta_info["opsa_topk_k"] = opsa_topk_k
+            except Exception:
+                opsa_topk_k = None
+            # ============ [EasyOPD:OPSA] End ============
+
             if not self.ref_in_actor:
                 teacher_output = self.ref_policy_wg.compute_ref_log_prob(teacher_batch)
             else:
@@ -1295,6 +1307,26 @@ class RayPPOTrainer:
                 teacher_log_probs = teacher_log_probs_raw[:, :max_resp_len]
             else:
                 teacher_log_probs = teacher_log_probs_raw
+
+            opsa_tensors = {"opsa_teacher_log_probs": teacher_log_probs}
+
+            # ============ [EasyOPD:OPSA] forward top-K teacher distributions to the actor ============
+            if opsa_topk_k is not None and "ref_topk_log_probs" in teacher_output.batch.keys():
+                topk_values_raw = teacher_output.batch["ref_topk_log_probs"]   # (B, max_valid_resp, K)
+                topk_indices_raw = teacher_output.batch["ref_topk_indices"]    # (B, max_valid_resp, K)
+                if topk_values_raw.shape[1] < max_resp_len:
+                    pad_cols = max_resp_len - topk_values_raw.shape[1]
+                    topk_values = torch.nn.functional.pad(topk_values_raw, (0, 0, 0, pad_cols), value=0.0)
+                    topk_indices = torch.nn.functional.pad(topk_indices_raw, (0, 0, 0, pad_cols), value=0)
+                elif topk_values_raw.shape[1] > max_resp_len:
+                    topk_values = topk_values_raw[:, :max_resp_len, :]
+                    topk_indices = topk_indices_raw[:, :max_resp_len, :]
+                else:
+                    topk_values = topk_values_raw
+                    topk_indices = topk_indices_raw
+                opsa_tensors["opsa_teacher_topk_log_probs"] = topk_values
+                opsa_tensors["opsa_teacher_topk_indices"] = topk_indices.to(torch.int64)
+            # ============ [EasyOPD:OPSA] End ============
 
             metrics = {
                 "opsa/teacher_log_prob_mean": teacher_log_probs.mean().detach().item(),
@@ -1320,7 +1352,7 @@ class RayPPOTrainer:
                     # Buffer for periodic TFR logging
                     self._opsa_tfr_buffer.append(tfr_proxy)
 
-            return DataProto.from_dict(tensors={"opsa_teacher_log_probs": teacher_log_probs}), metrics
+            return DataProto.from_dict(tensors=opsa_tensors), metrics
 
         except Exception as e:
             print(f"[EasyOPD:OPSA] Warning: Failed to build OPSA teacher batch: {e}")
