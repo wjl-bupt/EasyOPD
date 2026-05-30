@@ -58,6 +58,10 @@ class DataParallelPPOActor(BasePPOActor):
         actor_optimizer (torch.optim.Optimizer, optional): Actor optimizer. Defaults to None.
     """
 
+    # Class-level guard so that the OPSA top-K-disabled-under-SP warning is emitted
+    # only once per process (avoids spam across micro-batches / training steps).
+    _opsa_sp_warning_emitted = False
+
     def __init__(self, config: ActorConfig, actor_module: nn.Module, actor_optimizer: torch.optim.Optimizer = None):
         """When optimizer is None, it is Reference Policy"""
         super().__init__(config)
@@ -116,6 +120,12 @@ class DataParallelPPOActor(BasePPOActor):
         # the gather/topk extraction non-trivial). Caller should use per-token mixed KL.
         # We still honour the caller's 3-tuple return contract — just hand back an empty dict.
         if opsa_extra_requested and self.use_ulysses_sp:
+            if not DataParallelPPOActor._opsa_sp_warning_emitted:
+                logger.warning(
+                    "[EasyOPD:OPSA] Ulysses sequence parallelism is active; top-K logits disabled. "
+                    "OPSA will fall back to per-token KL approximation with reduced accuracy."
+                )
+                DataParallelPPOActor._opsa_sp_warning_emitted = True
             opsa_extra_requested = False
             opsa_topk_k = None
             opsa_gather_indices = None
@@ -857,17 +867,41 @@ class DataParallelPPOActor(BasePPOActor):
                         # the original OPSA implementation (loss_fn.kl_type="mixed",
                         # mixed_kl_weight=0.5, topk_logits_k=512, zero_outside_topk=false).
                         teacher_topk_lp = model_inputs.get("opsa_teacher_topk_log_probs", None)
+                        opsa_temperature = float(self.config.get("opsa_temperature", 1.0))
+                        topk_path_used = False
                         if teacher_topk_lp is not None and student_topk_log_probs is not None:
                             # Both shape (B, resp_len, K). Compute KL summed over the K dim.
                             teacher_topk_lp = teacher_topk_lp.to(student_topk_log_probs.dtype)
+                            # Apply temperature scaling at the distribution level BEFORE renormalization,
+                            # mirroring canonical KD temperature softening (logits / T -> softmax). This
+                            # is preferred over a post-hoc KL/T scaling because it actually softens the
+                            # teacher/student distributions over the K subset. When opsa_temperature == 1.0
+                            # this is a no-op and the result is identical to the un-scaled path.
+                            if opsa_temperature != 1.0:
+                                teacher_topk_lp = teacher_topk_lp / opsa_temperature
+                                student_topk_log_probs = student_topk_log_probs / opsa_temperature
+                            # Renormalize top-K log-probs to form valid probability distributions.
+                            # The original top-K log-probs are sliced from full-vocab log-softmax
+                            # and do NOT sum to 1 (typically only 0.01~0.1), which makes the raw
+                            # KL mathematically invalid and causes the OPSA loss to stay large.
+                            teacher_topk_lp = teacher_topk_lp - torch.logsumexp(teacher_topk_lp, dim=-1, keepdim=True)
+                            student_topk_log_probs = student_topk_log_probs - torch.logsumexp(student_topk_log_probs, dim=-1, keepdim=True)
                             t_p = teacher_topk_lp.exp()
                             s_p = student_topk_log_probs.exp()
                             forward_kl_topk = (t_p * (teacher_topk_lp - student_topk_log_probs)).sum(dim=-1)
                             reverse_kl_topk = (s_p * (student_topk_log_probs - teacher_topk_lp)).sum(dim=-1)
                             forward_kl = forward_kl_topk.clamp(min=0.0)
                             reverse_kl = reverse_kl_topk.clamp(min=0.0)
+                            topk_path_used = True
                         else:
                             # ---- Fallback: per-token Mixed KL on chosen-token scalar log-probs ----
+                            if not hasattr(self, '_opsa_fallback_warned'):
+                                logger.warning(
+                                    "[EasyOPD:OPSA] Top-K logits unavailable; using per-token KL approximation. "
+                                    "This computes KL only on the chosen token, which significantly underestimates "
+                                    "the true distribution-level KL divergence. Consider enabling top-K (opsa_topk_logits_k > 0)."
+                                )
+                                self._opsa_fallback_warned = True
                             # Forward KL surrogate: p_T(y_t) * (log p_T(y_t) - log p_S(y_t))
                             forward_kl = (teacher_log_probs.exp() * (teacher_log_probs - student_log_probs)).clamp(min=0.0)
                             # Reverse KL surrogate: p_S(y_t) * (log p_S(y_t) - log p_T(y_t))
@@ -900,8 +934,12 @@ class DataParallelPPOActor(BasePPOActor):
                         # full-vocab logits are still available (e.g. inside the forward pass).
                         # When opsa_temperature == 1.0 (default) this is a no-op and preserves the
                         # original behaviour exactly.
-                        opsa_temperature = float(self.config.get("opsa_temperature", 1.0))
-                        if opsa_temperature != 1.0:
+                        #
+                        # NOTE: For the top-K path above, temperature is already applied at the
+                        # distribution level (logit/T -> renormalize) before computing KL, which is
+                        # the canonical KD formulation; in that case we MUST NOT divide kl_per_token
+                        # by T again. Only the per-token fallback path uses this post-hoc KL scaling.
+                        if opsa_temperature != 1.0 and not topk_path_used:
                             kl_per_token = kl_per_token / opsa_temperature
 
                         opsa_use_window = self.config.get("opsa_use_window_weighting", True)
