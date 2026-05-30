@@ -1961,6 +1961,9 @@ class RayPPOTrainer:
         to construct the PPO dataflow.
         The light-weight advantage computation is done on the driver process.
         """
+        import numpy as np
+        import uuid
+
         from omegaconf import OmegaConf
 
         from verl.utils.tracking import Tracking
@@ -2277,6 +2280,9 @@ class RayPPOTrainer:
                             if opsa_result is not None:
                                 batch = batch.union(opsa_result)
                                 metrics.update(opsa_pre_metrics)
+                                print(f"[EasyOPD:OPSA] Step {self.global_steps}: teacher log-probs injected, shape={opsa_result.batch['opsa_teacher_log_probs'].shape}")
+                            else:
+                                print(f"[EasyOPD:OPSA] Step {self.global_steps}: WARNING - _maybe_build_opsa_batch returned None! OPSA loss will NOT execute.")
 
                             # Periodic TFR proxy reporting (paper Section 3.3)
                             if (

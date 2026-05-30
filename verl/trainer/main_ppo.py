@@ -198,7 +198,8 @@ class TaskRunner:
 
         token_kl_reg = getattr(config.algorithm, "token_kl_reg", None)
         token_kl_needed = bool(token_kl_reg and getattr(token_kl_reg, "enable", False))
-        if config.algorithm.use_kl_in_reward or config.actor_rollout_ref.actor.use_kl_loss or token_kl_needed:
+        opsa_needed = config.actor_rollout_ref.actor.get("opsa_enable", False)
+        if config.algorithm.use_kl_in_reward or config.actor_rollout_ref.actor.use_kl_loss or token_kl_needed or opsa_needed:
             self.role_worker_mapping[Role.RefPolicy] = ray.remote(ref_policy_cls)
             self.mapping[Role.RefPolicy] = "global_pool"
 

@@ -688,7 +688,10 @@ class DataParallelPPOActor(BasePPOActor):
                     # the per-chosen-token contribution of the forward KL when only the argmax mass
                     # matters — the standard approach when full vocab logits are unavailable.
                     opsa_enabled = self.config.get("opsa_enable", False)
+                    if opsa_enabled and "opsa_teacher_log_probs" not in model_inputs:
+                        print(f"[EasyOPD:OPSA] WARNING: opsa_enable=True but 'opsa_teacher_log_probs' NOT in model_inputs! Keys: {list(model_inputs.keys())}")
                     if opsa_enabled and "opsa_teacher_log_probs" in model_inputs:
+                        print(f"[EasyOPD:OPSA] OPSA loss branch ENTERED. teacher_log_probs shape: {model_inputs['opsa_teacher_log_probs'].shape}")
                         from easyopd.methods.opsa.core import (
                             compute_early_window_weights,
                         )

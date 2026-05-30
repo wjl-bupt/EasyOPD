@@ -21,7 +21,6 @@ Paper: https://arxiv.org/abs/2605.15239
 """
 
 import argparse
-import json
 from collections import Counter
 from pathlib import Path
 
@@ -199,12 +198,20 @@ def main():
     # matching the original OPSA setup)
     dataset_name = args.dataset.split("/")[-1].lower().replace("-", "_")
 
-    # Convert content lists to JSON strings for parquet compatibility
+    # Store as 'prompt' column (list of chat messages) for verl RLHFDataset compatibility
+    # Also include 'data_source' and 'reward_model' fields required by verl's reward pipeline.
+    # OPSA is pure self-distillation and ignores rewards, but these fields must exist to
+    # prevent KeyError in NaiveRewardManager.
     train_records = []
     for item in processed:
-        record = {"content": json.dumps(item["content"], ensure_ascii=False)}
+        safety_label = item.get("safety_label", "unknown")
+        record = {
+            "prompt": item["content"],  # list of dicts, e.g. [{"role": "user", "content": "..."}]
+            "data_source": "opsa",
+            "reward_model": {"ground_truth": safety_label, "style": "rule"},
+        }
         if "safety_label" in item:
-            record["safety_label"] = item["safety_label"]
+            record["safety_label"] = safety_label
         train_records.append(record)
 
     train_path = output_dir / f"{dataset_name}_train.parquet"
