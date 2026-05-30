@@ -90,7 +90,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.optim.lr=${ACTOR_LR} \
     actor_rollout_ref.actor.optim.weight_decay=${WEIGHT_DECAY} \
     actor_rollout_ref.actor.optim.lr_warmup_steps=${LR_WARMUP_STEPS} \
-    +actor_rollout_ref.actor.optim.warmup_style=constant \
+    actor_rollout_ref.actor.optim.warmup_style=constant \
     actor_rollout_ref.actor.grad_clip=${GRAD_CLIP} \
     actor_rollout_ref.actor.ppo_mini_batch_size=${MINI_BATCH_SIZE} \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=8 \
@@ -103,9 +103,9 @@ python3 -m verl.trainer.main_ppo \
     +actor_rollout_ref.actor.opsa_use_window_weighting=true \
     +actor_rollout_ref.actor.opsa_distillation_loss_coef=${OPSA_LOSS_COEF} \
     +actor_rollout_ref.actor.opsa_loss_agg_mode=token-mean \
-    +actor_rollout_ref.actor.opsa_kl_type=${OPSA_KL_TYPE} \
-    +actor_rollout_ref.actor.opsa_mixed_kl_weight=${OPSA_MIXED_KL_WEIGHT} \
-    +actor_rollout_ref.actor.opsa_topk_logits_k=${OPSA_TOPK_LOGITS_K} \
+    actor_rollout_ref.actor.opsa_kl_type=${OPSA_KL_TYPE} \
+    actor_rollout_ref.actor.opsa_mixed_kl_weight=${OPSA_MIXED_KL_WEIGHT} \
+    actor_rollout_ref.actor.opsa_topk_logits_k=${OPSA_TOPK_LOGITS_K} \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.temperature=${ROLLOUT_TEMPERATURE} \
     actor_rollout_ref.rollout.gpu_memory_utilization=${GPU_MEMORY_UTILIZATION} \

@@ -229,6 +229,9 @@ class ActorConfig(BaseConfig):
         "You are a helpful AI assistant. Respond to the user's request directly "
         "and helpfully. Do not over-refuse safe and reasonable requests."
     )
+    opsa_kl_type: str = "mixed"  # Options: forward, reverse, mixed
+    opsa_mixed_kl_weight: float = 0.5  # Weight for forward KL in mixed mode
+    opsa_topk_logits_k: int = 512  # Top-K logits for KL computation (0 = per-token only)
     opsa_tfr_eval_frequency: int = 10
     opsa_tfr_threshold: float = 0.8
     # ============ [EasyOPD:OPSA] End ============
