@@ -22,7 +22,6 @@ Paper: https://arxiv.org/abs/2605.15239
 
 import argparse
 import json
-import random
 from collections import Counter
 from pathlib import Path
 
@@ -69,18 +68,6 @@ def parse_args():
         type=int,
         default=None,
         help="Maximum number of samples to process. None for all."
-    )
-    parser.add_argument(
-        "--val_ratio",
-        type=float,
-        default=0.05,
-        help="Fraction of training data to hold out for validation."
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=42,
-        help="Random seed for train/val split."
     )
     parser.add_argument(
         "--prompt_key",
@@ -208,56 +195,35 @@ def main():
 
     print(f"Total processed: {len(processed)} samples")
 
-    # Split into train/val
-    random.seed(args.seed)
-    indices = list(range(len(processed)))
-    random.shuffle(indices)
-
-    val_size = int(len(processed) * args.val_ratio)
-    val_indices = set(indices[:val_size])
-    train_data = [processed[i] for i in range(len(processed)) if i not in val_indices]
-    val_data = [processed[i] for i in val_indices]
-
-    # Save as parquet
+    # Save as parquet (no train/val split: full data used for training,
+    # matching the original OPSA setup)
     dataset_name = args.dataset.split("/")[-1].lower().replace("-", "_")
 
     # Convert content lists to JSON strings for parquet compatibility
     train_records = []
-    for item in train_data:
+    for item in processed:
         record = {"content": json.dumps(item["content"], ensure_ascii=False)}
         if "safety_label" in item:
             record["safety_label"] = item["safety_label"]
         train_records.append(record)
 
-    val_records = []
-    for item in val_data:
-        record = {"content": json.dumps(item["content"], ensure_ascii=False)}
-        if "safety_label" in item:
-            record["safety_label"] = item["safety_label"]
-        val_records.append(record)
-
     train_path = output_dir / f"{dataset_name}_train.parquet"
-    val_path = output_dir / f"{dataset_name}_val.parquet"
-
     pd.DataFrame(train_records).to_parquet(train_path, index=False)
-    pd.DataFrame(val_records).to_parquet(val_path, index=False)
 
     print("\nSaved:")
-    print(f"  Train: {train_path} ({len(train_data)} samples)")
-    print(f"  Val:   {val_path} ({len(val_data)} samples)")
+    print(f"  Train: {train_path} ({len(train_records)} samples)")
 
     # Print label distribution
     if label_key:
         labels = [r.get("safety_label", "unknown") for r in train_records]
         dist = Counter(labels)
-        print("\nLabel distribution (train):")
+        print("\nLabel distribution:")
         for label, count in sorted(dist.items()):
             print(f"  {label}: {count} ({count/len(labels)*100:.1f}%)")
 
     print("\nDone! Next steps:")
     print(f"  1. Update DATA_PATH in run_opsa.sh to: {train_path}")
-    print(f"  2. Update VAL_DATA_PATH to: {val_path}")
-    print("  3. Run: bash examples/opsa/run_opsa.sh")
+    print("  2. Run: bash examples/opsa/run_opsa.sh")
 
 
 if __name__ == "__main__":

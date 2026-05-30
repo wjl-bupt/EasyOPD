@@ -28,7 +28,9 @@ export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"
 # ============ Configuration ============
 MODEL_PATH="${MODEL_PATH:-Qwen/Qwen3-1.7B}"
 DATA_PATH="${DATA_PATH:-data/opsa/safechain_train.parquet}"
-VAL_DATA_PATH="${VAL_DATA_PATH:-data/opsa/safechain_val.parquet}"
+# No separate validation split (matches the original OPSA setup); reuse the
+# training file so verl trainer's required val_files is satisfied.
+VAL_DATA_PATH="${VAL_DATA_PATH:-${DATA_PATH}}"
 OUTPUT_DIR="${OUTPUT_DIR:-outputs/opsa}"
 
 # GPU Configuration
