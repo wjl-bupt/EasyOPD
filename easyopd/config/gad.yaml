@@ -1,0 +1,64 @@
+# GAD: Generative Adversarial Distillation
+# Paper: https://arxiv.org/abs/2511.14424
+#
+# This is the EasyOPD top-level entry config for `EasyOPD.from_hparams("gad")`.
+# It is self-contained (the EasyOPD `_load_config` does not perform Hydra
+# `defaults`-style include-merging at the framework level). For the canonical
+# verl/hydra fragments composed by the launcher script, see the deeper files
+# under `easyopd/config/gad/` (e.g. `easyopd/config/gad/base.yaml`).
+
+method:
+  name: gad
+  description: "GAD: Generative Adversarial Distillation"
+
+model:
+  # Student (generator) — the model to be trained.
+  student_model_path: "Qwen/Qwen2.5-0.5B-Instruct"
+  # Teacher reference (only used to seed the discriminator init checkpoint
+  # in adversarial setups). GAD does NOT run a live teacher rollout.
+  teacher_model_path: "Qwen/Qwen2.5-1.5B-Instruct"
+
+training:
+  # verl standard training parameters
+  adv_estimator: gae
+  loss_agg_mode: token-mean
+  actor_lr: 1.0e-6
+  train_batch_size: 64
+  ppo_mini_batch_size: 64
+  total_epochs: 1
+
+# GAD-specific knobs (consumed by the critic-as-discriminator path).
+gad:
+  enable: true
+  # REQUIRED at launch time: path to a pretrained discriminator checkpoint
+  # (typically a warmup-stage SFT model). Must be set via CLI override or
+  # in a downstream composed config.
+  discriminator_init_path: "???"
+  metrics_prefix: gad
+
+# GAD repurposes the critic as the reward source; no separate RM.
+reward_model:
+  enable: false
+
+# GAD does not use a teacher sidecar; distillation is disabled at the
+# EasyOPD level (the adversarial signal comes from the critic head).
+distillation:
+  enabled: false
+
+rollout:
+  max_prompt_length: 1024
+  max_response_length: 1024
+  temperature: 1.0
+  n: 1
+  gpu_memory_utilization: 0.6
+
+data:
+  # GAD reuses the standard math_qa pipeline; the adversarial signal is
+  # orthogonal to the dataset choice.
+  dataset: "openai/gsm8k"
+  dataset_split: "train"
+  val_split: "test"
+  prompt_template: "math_qa"
+  prompt_key: content
+  max_prompt_length: 1024
+  truncation: right

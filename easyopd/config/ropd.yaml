@@ -1,0 +1,81 @@
+# ROPD: Rubric-based On-Policy Distillation
+#
+# This is the EasyOPD top-level entry config for `EasyOPD.from_hparams("ropd")`.
+# It is self-contained (the EasyOPD `_load_config` does not perform Hydra
+# `defaults`-style include-merging at the framework level). For the canonical
+# verl/hydra fragments composed by `examples/ropd_trainer/train_ropd.sh`, see
+# the deeper files under `easyopd/config/ropd/` —
+#   * `easyopd/config/ropd/base.yaml`            (verl PPO fragment)
+#   * `easyopd/config/ropd/judge.yaml`           (reward-manager knobs)
+#   * `easyopd/config/ropd/judge_providers.yaml` (provider profiles)
+#   * `easyopd/config/ropd/sft.yaml`             (optional SFT warmup)
+
+method:
+  name: ropd
+  description: "ROPD: Rubric-based On-Policy Distillation with external judge"
+
+model:
+  # Student model (to be trained).
+  student_model_path: "Qwen/Qwen2.5-7B-Instruct"
+  student_tokenizer_path: "Qwen/Qwen2.5-7B-Instruct"
+  # ROPD does NOT run a teacher inside the training cluster; the teacher
+  # answer comes from the external judge service configured under
+  # `easyopd/config/ropd/judge_providers.yaml`.
+
+training:
+  adv_estimator: grpo
+  loss_agg_mode: token-mean
+  actor_lr: 1.0e-6
+  train_batch_size: 64
+  ppo_mini_batch_size: 64
+  total_epochs: 3
+
+# ROPD-specific reward manager wiring.
+reward_model:
+  enable: true
+  reward_manager: ropd
+  reward_kwargs:
+    ropd:
+      max_group_concurrency: 4
+      max_pair_concurrency: 8
+      max_verifier_subject_concurrency: 2
+      provider_resolution:
+        spec_path: easyopd/config/ropd/judge_providers.yaml
+        entrypoint: train
+      reward_quality_gate:
+        enabled: true
+        max_fallback_rate: 0.09375
+        max_retry_rounds: 3
+        retry_pair_concurrency: 2
+        min_group_size_after_exclusion: 2
+        max_dropped_pairs_per_group: 3
+        min_effective_group_rate: 0.75
+      request_scheduler:
+        num_workers: 16
+        max_queue_size: 256
+      debug:
+        text_artifact_mode: diagnostic_only
+        retention_days: 14
+
+distillation:
+  enabled: true
+  n_gpus_per_node: 4
+  nnodes: 1
+
+rollout:
+  max_prompt_length: 2048
+  max_response_length: 2048
+  temperature: 1.0
+  n: 4
+  gpu_memory_utilization: 0.6
+
+data:
+  # ROPD's default math_qa pipeline; the rubric signal is orthogonal to the
+  # dataset choice. Override `dataset` to swap to other rubric-friendly tasks.
+  dataset: "openai/gsm8k"
+  dataset_split: "train"
+  val_split: "test"
+  prompt_template: "math_qa"
+  prompt_key: content
+  max_prompt_length: 2048
+  truncation: right

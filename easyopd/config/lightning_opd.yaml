@@ -1,0 +1,68 @@
+# Lightning-OPD: Offline On-Policy Distillation
+# Paper: https://arxiv.org/abs/2604.13010
+#
+# This is the EasyOPD top-level entry config for `EasyOPD.from_hparams("lightning_opd")`.
+# It is self-contained (the EasyOPD `_load_config` does not perform Hydra
+# `defaults`-style include-merging at the framework level). For the canonical
+# verl/hydra fragments composed by `examples/lightning_opd/train_lightning_opd.sh`,
+# see the deeper files under `easyopd/config/lightning_opd/` —
+#   * `easyopd/config/lightning_opd/base.yaml`      (algorithm + actor defaults)
+#   * `easyopd/config/lightning_opd/data_prep.yaml` (offline teacher logprobs)
+#   * `easyopd/config/lightning_opd/sft.yaml`       (SFT warmup recipe)
+#   * `easyopd/config/lightning_opd/training.yaml`  (PPO trainer hyperparameters)
+
+method:
+  name: lightning_opd
+  description: "Lightning-OPD: Offline On-Policy Distillation with precomputed teacher logprobs"
+
+model:
+  # Student model (to be trained).
+  student_model_path: "Qwen/Qwen3-4B-Base"
+  # Lightning-OPD does NOT run a live teacher Ray cluster; teacher logprobs
+  # are precomputed offline (see `easyopd/config/lightning_opd/data_prep.yaml`).
+  teacher_model_path: "Qwen/Qwen3-8B"
+
+training:
+  # Lightning-OPD uses a custom advantage estimator routed through hooks.
+  adv_estimator: on_policy_distillation
+  loss_agg_mode: token-mean
+  actor_lr: 2.0e-6
+  train_batch_size: 256
+  ppo_mini_batch_size: 256
+  total_epochs: 1
+  total_training_steps: 3000   # paper §3.2 SFT warmup steps; PPO can reuse
+
+# Lightning-OPD does NOT enable a live teacher sidecar.
+distillation:
+  enabled: false
+
+# Algorithm parameters consumed by the lightning_opd advantage estimator.
+algorithm:
+  adv_estimator: on_policy_distillation
+  use_kl_in_reward: false
+  gamma: 1.0
+  lam: 1.0
+  kl_penalty: kl
+
+rollout:
+  max_prompt_length: 1024
+  max_response_length: 4096
+  temperature: 1.0
+  n: 1
+  name: vllm
+  tensor_model_parallel_size: 2
+  gpu_memory_utilization: 0.4
+
+data:
+  # Lightning-OPD expects parquet shards with an extra `teacher_log_probs`
+  # column produced offline by `prepare.py`. The default HuggingFace recipe
+  # is registered in `easyopd/data_provider.py::DATASET_RECIPES`.
+  dataset: "open-thoughts/OpenThoughts3-1.2M"
+  dataset_split: "train"
+  val_split: "test"
+  prompt_template: "math_qa"
+  prompt_key: content
+  max_prompt_length: 1024
+  max_response_length: 4096
+  filter_overlong_prompts: true
+  truncation: error
