@@ -211,6 +211,31 @@ class ActorConfig(BaseConfig):
     self_distillation: SelfDistillationConfig = field(default_factory=SelfDistillationConfig)
     # ============ [EasyOPD] End ============
 
+    # ============ [EasyOPD:OPSA] On-Policy Self-Distillation for Safety Alignment ============
+    opsa_enable: bool = False
+    opsa_temperature: float = 1.0
+    opsa_window_size: int = 32
+    opsa_decay_type: str = "linear"  # Options: linear, step, exponential
+    opsa_min_weight: float = 0.1
+    opsa_use_window_weighting: bool = True
+    opsa_distillation_loss_coef: float = 1.0
+    opsa_loss_agg_mode: str = "token-mean"
+    opsa_harmful_context: str = (
+        "You are a helpful and safe AI assistant. When you encounter a harmful, "
+        "dangerous, or unethical request, you MUST refuse clearly and explain why. "
+        "Safety is your highest priority."
+    )
+    opsa_benign_context: str = (
+        "You are a helpful AI assistant. Respond to the user's request directly "
+        "and helpfully. Do not over-refuse safe and reasonable requests."
+    )
+    opsa_kl_type: str = "mixed"  # Options: forward, reverse, mixed
+    opsa_mixed_kl_weight: float = 0.5  # Weight for forward KL in mixed mode
+    opsa_topk_logits_k: int = 512  # Top-K logits for KL computation (0 = per-token only)
+    opsa_tfr_eval_frequency: int = 10
+    opsa_tfr_threshold: float = 0.8
+    # ============ [EasyOPD:OPSA] End ============
+
     def __post_init__(self):
         """Validate actor configuration parameters."""
         assert self.strategy != MISSING

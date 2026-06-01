@@ -482,6 +482,35 @@ class RayPPOTrainer:
             self.easyopd_metrics = None
         # ============ [EasyOPD] End ============
 
+        # ============ [EasyOPD:OPSA] On-Policy Self-Distillation configuration ============
+        self.opsa_enable = config.actor_rollout_ref.actor.get("opsa_enable", False)
+        if self.opsa_enable:
+            self.opsa_harmful_context = config.actor_rollout_ref.actor.get(
+                "opsa_harmful_context",
+                "You are a helpful and safe AI assistant. When you encounter a harmful, dangerous, or unethical request, you MUST refuse clearly and explain why. Safety is your highest priority."
+            )
+            self.opsa_benign_context = config.actor_rollout_ref.actor.get(
+                "opsa_benign_context",
+                "You are a helpful AI assistant. Respond to the user's request directly and helpfully. Do not over-refuse safe and reasonable requests."
+            )
+            # TFR: how often the privileged context flips an unsafe response to safe.
+            # Tracked as a proxy via teacher vs. student log-prob gap on harmful samples.
+            self.opsa_tfr_eval_frequency = int(
+                config.actor_rollout_ref.actor.get("opsa_tfr_eval_frequency", 10)
+            )
+            self.opsa_tfr_threshold = float(
+                config.actor_rollout_ref.actor.get("opsa_tfr_threshold", 0.8)
+            )
+            # Rolling buffer: (teacher_lp_mean, student_lp_mean) for harmful samples
+            self._opsa_tfr_buffer: list = []
+            print(
+                f"[EasyOPD:OPSA] On-Policy Self-Distillation enabled | "
+                f"window_size={config.actor_rollout_ref.actor.get('opsa_window_size', 32)} | "
+                f"tfr_eval_frequency={self.opsa_tfr_eval_frequency} | "
+                f"tfr_threshold={self.opsa_tfr_threshold}"
+            )
+        # ============ [EasyOPD:OPSA] End ============
+
         # define in-reward KL control
         # kl loss control currently not suppoorted
         if self.config.algorithm.use_kl_in_reward:
@@ -1116,6 +1145,238 @@ class RayPPOTrainer:
 
         return None
     # ============ [EasyOPD] End ============
+
+    # ============ [EasyOPD:OPSA] Build self-distillation batch with privileged contexts ============
+    def _maybe_build_opsa_batch(self, batch):
+        """Build teacher inputs with privileged contexts for OPSA self-distillation.
+
+        For OPSA, the teacher is a frozen copy of the student model, but provided
+        with type-conditional privileged contexts (paper Section 3.2):
+        - Harmful queries  → safety-focused system prompt  (I_h)
+        - Benign queries   → helpfulness-focused system prompt (I_b)
+
+        Each prompt in the batch is re-tokenized with its corresponding privileged
+        system prompt prepended, then passed through the frozen ref model to obtain
+        per-token teacher log-probs used as the dense KL supervision target.
+
+        Returns:
+            Tuple of (DataProto with opsa_teacher_log_probs, metrics) or (None, {}).
+        """
+        if not self.opsa_enable:
+            return None, {}
+
+        try:
+            import torch
+
+            device = batch.batch["input_ids"].device
+            batch_size = batch.batch["input_ids"].shape[0]
+            responses = batch.batch["responses"]        # (B, max_resp_len)
+            response_mask = batch.batch["response_mask"]  # (B, max_resp_len)
+            # batch["prompts"] holds only the prompt token ids (without response).
+            # Use it instead of input_ids to avoid leaking the on-policy response
+            # into the teacher's user message (Bug 7 fix).
+            if "prompts" in batch.batch:
+                prompt_ids_batch = batch.batch["prompts"]
+            elif "input_ids" in batch.batch:
+                prompt_ids_batch = batch.batch["input_ids"]
+            else:
+                print("[EasyOPD:OPSA] Warning: Neither 'prompts' nor 'input_ids' found in batch.")
+                return None, {}
+            max_prompt_len = getattr(self.config.data, "max_prompt_length", 1024)
+            pad_token_id = self.tokenizer.pad_token_id or 0
+
+            # safety_label column: "harmful" | "benign" | missing → default to harmful context
+            safety_labels = batch.non_tensor_batch.get("safety_label", None)
+
+            apply_kwargs = {}
+            if hasattr(self.config.data, "apply_chat_template_kwargs"):
+                apply_kwargs = dict(self.config.data.get("apply_chat_template_kwargs", {}) or {})
+
+            teacher_input_ids_list = []
+            teacher_attention_mask_list = []
+            teacher_position_ids_list = []
+            # Per-sample valid response lengths; used later to build aligned responses tensor.
+            valid_resp_lens = []
+
+            for i in range(batch_size):
+                # Choose privileged context based on query type
+                if safety_labels is not None:
+                    label = safety_labels[i] if isinstance(safety_labels[i], str) else str(safety_labels[i])
+                    privileged_ctx = (
+                        self.opsa_benign_context if label.lower() == "benign"
+                        else self.opsa_harmful_context
+                    )
+                else:
+                    privileged_ctx = self.opsa_harmful_context
+
+                # Decode only the prompt part (no response tokens).
+                # batch["prompts"] has shape (B, prompt_len); batch["input_ids"] has shape
+                # (B, prompt_len + resp_len).  In either case we use the attention_mask
+                # sliced to exactly prompt_ids_batch[i]'s own length to strip left-padding.
+                prompt_seq_len = prompt_ids_batch[i].shape[-1]
+                # attention_mask covers the full input_ids sequence; take only the
+                # first prompt_seq_len positions which correspond to the prompt.
+                attn = batch.batch["attention_mask"][i, :prompt_seq_len]
+                # Find the first valid (non-padding) token position for robust decoding.
+                valid_indices = (attn == 1).nonzero(as_tuple=True)[0]
+                if len(valid_indices) > 0:
+                    first_valid_idx = valid_indices[0]
+                    raw_prompt_text = self.tokenizer.decode(
+                        prompt_ids_batch[i][first_valid_idx:], skip_special_tokens=True
+                    )
+                else:
+                    raw_prompt_text = ""
+
+                teacher_messages = [
+                    {"role": "system", "content": privileged_ctx},
+                    {"role": "user", "content": raw_prompt_text},
+                ]
+
+                teacher_prompt_text = self.tokenizer.apply_chat_template(
+                    teacher_messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    **apply_kwargs,
+                )
+
+                teacher_prompt_out = self.tokenizer(
+                    teacher_prompt_text,
+                    return_tensors="pt",
+                    add_special_tokens=False,
+                    truncation=True,
+                    max_length=max_prompt_len,
+                )
+                t_prompt_ids = teacher_prompt_out["input_ids"].squeeze(0)
+                t_prompt_mask = teacher_prompt_out["attention_mask"].squeeze(0)
+
+                # Concatenate with the student's valid (non-padded) on-policy response tokens.
+                valid_resp_len = int(response_mask[i].sum().item())
+                valid_resp_lens.append(valid_resp_len)
+                resp_ids = responses[i, :valid_resp_len]
+                full_ids = torch.cat([t_prompt_ids, resp_ids], dim=0)
+                full_mask = torch.cat([t_prompt_mask, torch.ones(valid_resp_len, dtype=torch.long)], dim=0)
+                full_pos = torch.arange(len(full_ids), dtype=torch.long)
+
+                teacher_input_ids_list.append(full_ids)
+                teacher_attention_mask_list.append(full_mask)
+                teacher_position_ids_list.append(full_pos)
+
+            # Pad to uniform length within this batch
+            teacher_input_ids = torch.nn.utils.rnn.pad_sequence(
+                teacher_input_ids_list, batch_first=True, padding_value=pad_token_id,
+            ).to(device)
+            teacher_attention_mask = torch.nn.utils.rnn.pad_sequence(
+                teacher_attention_mask_list, batch_first=True, padding_value=0,
+            ).to(device)
+            teacher_position_ids = torch.nn.utils.rnn.pad_sequence(
+                teacher_position_ids_list, batch_first=True, padding_value=0,
+            ).to(device)
+
+            # Build per-sample response tensors aligned to the teacher sequence.
+            # _forward_micro_batch uses `responses.size(-1)` as response_length to slice
+            # the last N positions off the teacher sequence.  We must pass a `responses`
+            # whose length equals the number of valid response tokens in the teacher
+            # input_ids so that the slice correctly covers the response region.
+            # Since different samples have different valid_resp_lens, we pad to the
+            # maximum and build a matching response_mask (Bug 1 fix).
+            max_valid_resp = max(valid_resp_lens)
+            teacher_responses = torch.zeros(batch_size, max_valid_resp, dtype=responses.dtype, device=device)
+            teacher_response_mask = torch.zeros(batch_size, max_valid_resp, dtype=response_mask.dtype, device=device)
+            for i, vlen in enumerate(valid_resp_lens):
+                teacher_responses[i, :vlen] = responses[i, :vlen]
+                teacher_response_mask[i, :vlen] = 1
+
+            # Pass through frozen ref model (teacher) to get per-token log-probs
+            teacher_batch = DataProto.from_dict(tensors={
+                "input_ids": teacher_input_ids,
+                "attention_mask": teacher_attention_mask,
+                "position_ids": teacher_position_ids,
+                "responses": teacher_responses,
+                "response_mask": teacher_response_mask,
+            })
+
+            # ============ [EasyOPD:OPSA] request top-K teacher logits when configured ============
+            opsa_topk_k = None
+            try:
+                actor_cfg = self.config.actor_rollout_ref.actor
+                opsa_topk_k_cfg = actor_cfg.get("opsa_topk_logits_k", 0)
+                if opsa_topk_k_cfg is not None and int(opsa_topk_k_cfg) > 0:
+                    opsa_topk_k = int(opsa_topk_k_cfg)
+                    teacher_batch.meta_info["opsa_topk_k"] = opsa_topk_k
+            except Exception:
+                opsa_topk_k = None
+            # ============ [EasyOPD:OPSA] End ============
+
+            if not self.ref_in_actor:
+                teacher_output = self.ref_policy_wg.compute_ref_log_prob(teacher_batch)
+            else:
+                teacher_output = self.actor_rollout_wg.compute_ref_log_prob(teacher_batch)
+
+            # Shape: (batch_size, max_valid_resp) — per-token log-probs under privileged context.
+            # Pad to (batch_size, max_resp_len) so the tensor aligns with response_mask and
+            # student log_prob when merged into the training batch via batch.union().
+            teacher_log_probs_raw = teacher_output.batch["ref_log_prob"]  # (B, max_valid_resp)
+            max_resp_len = responses.shape[1]
+            if teacher_log_probs_raw.shape[1] < max_resp_len:
+                pad_cols = max_resp_len - teacher_log_probs_raw.shape[1]
+                teacher_log_probs = torch.nn.functional.pad(
+                    teacher_log_probs_raw, (0, pad_cols), value=0.0
+                )
+            elif teacher_log_probs_raw.shape[1] > max_resp_len:
+                teacher_log_probs = teacher_log_probs_raw[:, :max_resp_len]
+            else:
+                teacher_log_probs = teacher_log_probs_raw
+
+            opsa_tensors = {"opsa_teacher_log_probs": teacher_log_probs}
+
+            # ============ [EasyOPD:OPSA] forward top-K teacher distributions to the actor ============
+            if opsa_topk_k is not None and "ref_topk_log_probs" in teacher_output.batch.keys():
+                topk_values_raw = teacher_output.batch["ref_topk_log_probs"]   # (B, max_valid_resp, K)
+                topk_indices_raw = teacher_output.batch["ref_topk_indices"]    # (B, max_valid_resp, K)
+                if topk_values_raw.shape[1] < max_resp_len:
+                    pad_cols = max_resp_len - topk_values_raw.shape[1]
+                    topk_values = torch.nn.functional.pad(topk_values_raw, (0, 0, 0, pad_cols), value=0.0)
+                    topk_indices = torch.nn.functional.pad(topk_indices_raw, (0, 0, 0, pad_cols), value=0)
+                elif topk_values_raw.shape[1] > max_resp_len:
+                    topk_values = topk_values_raw[:, :max_resp_len, :]
+                    topk_indices = topk_indices_raw[:, :max_resp_len, :]
+                else:
+                    topk_values = topk_values_raw
+                    topk_indices = topk_indices_raw
+                opsa_tensors["opsa_teacher_topk_log_probs"] = topk_values
+                opsa_tensors["opsa_teacher_topk_indices"] = topk_indices.to(torch.int64)
+            # ============ [EasyOPD:OPSA] End ============
+
+            metrics = {
+                "opsa/teacher_log_prob_mean": teacher_log_probs.mean().detach().item(),
+                "opsa/teacher_log_prob_std": teacher_log_probs.std().detach().item(),
+            }
+
+            # TFR proxy: on harmful samples, measure how much higher the teacher log-prob is
+            # compared to the student's on-policy log-prob.  A large positive gap means the
+            # privileged context is successfully activating safer (more probable) responses.
+            if safety_labels is not None and "old_log_probs" in batch.batch:
+                import numpy as np
+                student_lp = batch.batch["old_log_probs"]  # (B, resp_len), student on-policy
+                harmful_mask = [
+                    (str(safety_labels[i]).lower() != "benign")
+                    for i in range(batch_size)
+                ]
+                if any(harmful_mask):
+                    harm_idx = [i for i, m in enumerate(harmful_mask) if m]
+                    teacher_lp_harmful = teacher_log_probs[harm_idx].mean().detach().item()
+                    student_lp_harmful = student_lp[harm_idx].mean().detach().item()
+                    tfr_proxy = teacher_lp_harmful - student_lp_harmful
+                    metrics["opsa/tfr_proxy_lp_gap"] = tfr_proxy
+                    # Buffer for periodic TFR logging
+                    self._opsa_tfr_buffer.append(tfr_proxy)
+
+            return DataProto.from_dict(tensors=opsa_tensors), metrics
+
+        except Exception as e:
+            print(f"[EasyOPD:OPSA] Warning: Failed to build OPSA teacher batch: {e}")
+            return None, {}
+    # ============ [EasyOPD:OPSA] End ============
 
     def _apply_filter_groups(self, batch: DataProto) -> DataProto:
         cfg = getattr(self.config.algorithm, "filter_groups", None)
@@ -1788,6 +2049,9 @@ class RayPPOTrainer:
         to construct the PPO dataflow.
         The light-weight advantage computation is done on the driver process.
         """
+        import numpy as np
+        import uuid
+
         from omegaconf import OmegaConf
 
         from verl.utils.tracking import Tracking
@@ -2097,6 +2361,32 @@ class RayPPOTrainer:
                                     self.config.trainer, "on_policy_merge", True
                                 )
                         # ============ [EasyOPD] End ============
+
+                        # ============ [EasyOPD:OPSA] Teacher log-prob injection for self-distillation ============
+                        if self.opsa_enable:
+                            opsa_result, opsa_pre_metrics = self._maybe_build_opsa_batch(batch)
+                            if opsa_result is not None:
+                                batch = batch.union(opsa_result)
+                                metrics.update(opsa_pre_metrics)
+                                print(f"[EasyOPD:OPSA] Step {self.global_steps}: teacher log-probs injected, shape={opsa_result.batch['opsa_teacher_log_probs'].shape}")
+                            else:
+                                print(f"[EasyOPD:OPSA] Step {self.global_steps}: WARNING - _maybe_build_opsa_batch returned None! OPSA loss will NOT execute.")
+
+                            # Periodic TFR proxy reporting (paper Section 3.3)
+                            if (
+                                self._opsa_tfr_buffer
+                                and self.global_steps % self.opsa_tfr_eval_frequency == 0
+                            ):
+                                import numpy as np
+                                tfr_mean = float(np.mean(self._opsa_tfr_buffer))
+                                metrics["opsa/tfr_proxy_lp_gap_avg"] = tfr_mean
+                                if tfr_mean < 0:
+                                    print(
+                                        f"[EasyOPD:OPSA] Step {self.global_steps}: TFR proxy gap={tfr_mean:.4f} "
+                                        f"(negative: privileged context may not be effective enough)"
+                                    )
+                                self._opsa_tfr_buffer.clear()
+                        # ============ [EasyOPD:OPSA] End ============
 
                         # update actor
                         with marked_timer("update_actor", timing_raw, color="red"):

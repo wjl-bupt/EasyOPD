@@ -74,7 +74,7 @@ def run_test(name: str, test_fn) -> TestResult:
 # Tests
 # ---------------------------------------------------------------------------
 
-EXPECTED_METHODS = ["g_opd", "gkd", "opcd", "sdpo", "simct", "simple", "sod", "vision_opd"]
+EXPECTED_METHODS = ["g_opd", "gkd", "opcd", "opsa", "sdpo", "simct", "simple", "sod", "vision_opd"]
 
 
 def test_auto_discover():
@@ -199,6 +199,7 @@ def test_method_hook_coverage():
         "g_opd": {"loss", "reward", "teacher_sidecar"},
         "vision_opd": {"loss", "teacher_sidecar"},
         "sdpo": {"loss", "teacher_sidecar"},
+        "opsa": {"loss", "teacher_sidecar"},
         "simple": {"loss", "alignment", "teacher_sidecar"},
         "simct": {"loss"},
     }
@@ -438,9 +439,11 @@ def print_data_format_summary():
   │ g_opd        │ Optional: opd_teacher for multi-teacher distill    │
   │ vision_opd   │ Required: images + bbox_images columns             │
   │ sdpo         │ Standard prompt-only (self-distillation)           │
+  │ opsa         │ Standard prompt-only (privileged context injected  │
+  │              │ on-the-fly for the teacher; safety-only data)      │
   └──────────────┴────────────────────────────────────────────────────┘
 
-  ✅ All text-based methods (gkd, sod, simple, simct, opcd, g_opd, sdpo)
+  ✅ All text-based methods (gkd, sod, simple, simct, opcd, g_opd, sdpo, opsa)
      share the SAME base data format: Parquet with chat-template prompts.
      No method-specific data preprocessing is needed.
 """)

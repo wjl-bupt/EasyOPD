@@ -103,6 +103,12 @@ DATASET_RECIPES: dict[str, dict[str, Any]] = {
         "prompt_template": "math_qa",
         "description": "GSM8K for self-distilled policy optimization",
     },
+    "opsa": {
+        "dataset": "UWNSL/SafeChain",
+        "dataset_split": "train",
+        "prompt_template": "prompt_only",
+        "description": "SafeChain dataset for OPSA safety self-distillation",
+    },
     "vision_opd": {
         "dataset": "HuggingFaceM4/DocumentVQA",
         "dataset_split": "train",
