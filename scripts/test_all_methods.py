@@ -74,11 +74,19 @@ def run_test(name: str, test_fn) -> TestResult:
 # Tests
 # ---------------------------------------------------------------------------
 
-EXPECTED_METHODS = ["g_opd", "gkd", "opcd", "opsa", "ropd", "sdpo", "simct", "simple", "sod", "vision_opd"]
+EXPECTED_METHODS = ["g_opd", "gad", "gkd", "opcd", "opsa", "ropd", "sdpo", "simct", "simple", "sod", "vision_opd"]
+
+# Methods that integrate with verl outside the actor-side HookDispatcher and
+# therefore legitimately have no actor LossHook / RolloutHook / RewardHook /
+# AlignmentHook / TeacherSidecarHook. GAD repurposes the PPO *critic* as a
+# Bradley-Terry discriminator and dispatches via
+# `verl/workers/critic/dp_critic.py`, so the actor side stays on verl's
+# unmodified PPO loss.
+NON_ACTOR_HOOK_METHODS = {"gad"}
 
 
 def test_auto_discover():
-    """Test that auto_discover finds all 10 methods."""
+    """Test that auto_discover finds all expected methods."""
     from easyopd.registry import _reset_registry, auto_discover, list_methods
 
     _reset_registry()
@@ -109,7 +117,12 @@ def test_hook_dispatch_all_methods():
     for method_name in EXPECTED_METHODS:
         method_cls = get_method(method_name)
         hooks = HookDispatcher._build_hooks(method_cls, {})
-        # Every method should have at least a LossHook
+        if method_name in NON_ACTOR_HOOK_METHODS:
+            # critic-only / non-actor methods (e.g. GAD): no actor hooks is
+            # the contract. They wire into verl outside the HookDispatcher
+            # path (e.g. via the critic worker or reward-manager registry).
+            continue
+        # Every other method should have at least a LossHook
         assert hooks.has_loss, f"Method '{method_name}' should have a LossHook"
         active = hooks.active_hooks()
         assert len(active) >= 1, f"Method '{method_name}' should have at least 1 active hook"
@@ -203,6 +216,9 @@ def test_method_hook_coverage():
         "simple": {"loss", "alignment", "teacher_sidecar"},
         "simct": {"loss"},
         "ropd": {"loss", "reward"},
+        # GAD modifies the PPO critic (Bradley-Terry discriminator) instead
+        # of the actor; it deliberately exposes no actor-side hook.
+        "gad": set(),
     }
 
     for method_name, expected in expected_hooks.items():
@@ -312,6 +328,9 @@ def test_single_method(method_name: str):
     def _test_hooks():
         method_cls = get_method(method_name)
         hooks = HookDispatcher._build_hooks(method_cls, {})
+        if method_name in NON_ACTOR_HOOK_METHODS:
+            # Non-actor methods (e.g. GAD): no actor LossHook is the contract.
+            return
         assert hooks.has_loss
 
     results.append(run_test(f"{method_name}/hooks", _test_hooks))

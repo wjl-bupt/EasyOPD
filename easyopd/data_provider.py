@@ -97,6 +97,22 @@ DATASET_RECIPES: dict[str, dict[str, Any]] = {
         "prompt_template": "math_qa",
         "description": "GSM8K for generalized on-policy distillation",
     },
+    "gad": {
+        "dataset": "openai/gsm8k",
+        "dataset_split": "train",
+        "prompt_template": "math_qa",
+        "description": (
+            "GAD (Generative Adversarial Distillation) repurposes the PPO "
+            "critic as a Bradley-Terry discriminator that compares a student "
+            "response against a teacher response. The dataset must therefore "
+            "expose both a `prompt` field (student input) and a "
+            "`teacher_response` field (teacher's reference output) for the "
+            "BT comparison; on plain QA datasets such as GSM8K the answer "
+            "column is used as the teacher response by the prompt template. "
+            "Users with a paired student/teacher dataset on HuggingFace can "
+            "override `data.dataset` accordingly."
+        ),
+    },
     "sdpo": {
         "dataset": "openai/gsm8k",
         "dataset_split": "train",

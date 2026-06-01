@@ -54,7 +54,16 @@ class DataParallelPPOCritic(BasePPOCritic):
         self.ulysses_sequence_parallel_size = self.config.get("ulysses_sequence_parallel_size", 1)
         self.device_name = get_device_name()
 
-    def _forward_micro_batch(self, micro_batch):
+    def _forward_micro_batch(self, micro_batch, *, compute_teacher: bool = False):
+        # ============ [EasyOPD:GAD] Swap input keys when scoring teacher ============
+        from easyopd.methods.gad.config import is_gad_enabled
+
+        _gad_active = is_gad_enabled(self.config)
+        if _gad_active and compute_teacher:
+            from easyopd.methods.gad.critic_forward import remap_to_teacher
+
+            micro_batch = remap_to_teacher(micro_batch)
+        # ============ [EasyOPD:GAD] End ============
         response_length = micro_batch["responses"].size(-1)
         multi_modal_inputs = {}
         if "multi_modal_inputs" in micro_batch.keys():
@@ -134,6 +143,13 @@ class DataParallelPPOCritic(BasePPOCritic):
                 else:
                     values = output.logits
                 values = values[:, -response_length - 1 : -1].squeeze(-1)
+            # ============ [EasyOPD:GAD] Reduce to last-token-only score ============
+            if _gad_active:
+                from easyopd.methods.gad.core import last_token_only
+
+                _response_mask_for_gad = attention_mask[:, -response_length:].to(values.dtype)
+                values = last_token_only(values, _response_mask_for_gad)
+            # ============ [EasyOPD:GAD] End ============
             return values
 
     def _optimizer_step(self):
@@ -195,6 +211,14 @@ class DataParallelPPOCritic(BasePPOCritic):
 
     @GPUMemoryLogger(role="dp critic", logger=logger)
     def update_critic(self, data: DataProto):
+        # ============ [EasyOPD:GAD] Discriminator-as-critic update ============
+        from easyopd.methods.gad.config import is_gad_enabled
+
+        if is_gad_enabled(self.config):
+            from easyopd.methods.gad.critic_update import update_critic_step
+
+            return update_critic_step(self, data)
+        # ============ [EasyOPD:GAD] End ============
         # make sure we are in training mode
         self.critic_module.train()
         metrics = {}

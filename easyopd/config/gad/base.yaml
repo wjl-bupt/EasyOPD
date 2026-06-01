@@ -1,0 +1,21 @@
+# Generative Adversarial Distillation (GAD) base configuration.
+#
+# This Hydra fragment is intended to compose on top of verl's PPO defaults.
+# The user MUST override `gad.discriminator_init_path` (a path to a pretrained
+# discriminator checkpoint, e.g. a warmup-stage SFT model).
+#
+# See docs/algo/gad.md for the end-to-end recipe.
+
+# yamllint disable rule:line-length
+
+gad:
+  enable: true
+  discriminator_init_path: ???   # REQUIRED — pretrained discriminator checkpoint
+  metrics_prefix: gad
+
+# GAD repurposes the critic as the reward source; no separate RM.
+reward_model:
+  enable: false
+
+# critic.model.path is left to the user — they will typically set it to
+# `${gad.discriminator_init_path}` in their launch script or composed config.
