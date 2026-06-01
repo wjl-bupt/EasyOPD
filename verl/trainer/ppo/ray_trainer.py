@@ -425,7 +425,7 @@ class RayPPOTrainer:
         # if ref_in_actor is True, the reference policy will be actor without lora applied
         self.ref_in_actor = config.actor_rollout_ref.model.get("lora_rank", 0) > 0
 
-        # ============ [EasyOPD:G-OPD] Context distillation and base model configuration ============
+        # ============ [EasyOPD] Context distillation and base model configuration ============
         # Context distillation (critique-based)
         self.critique_vllm_url = config.algorithm.get("critique_vllm_url", None)
         self.use_context_distillation = self.critique_vllm_url is not None
@@ -454,14 +454,33 @@ class RayPPOTrainer:
         self.use_base_models = self.base_model_path is not None and self.ref_base_model_path is not None
 
         if self.use_base_models:
-            print(f"[EasyOPD:G-OPD] Corrected reward enabled with base models:")
+            print(f"[EasyOPD] Corrected reward enabled with base models:")
             print(f"  Actor base model: {self.base_model_path}")
             print(f"  Ref base model: {self.ref_base_model_path}")
         if self.use_context_distillation:
-            print(f"[EasyOPD:G-OPD] Context distillation enabled with vLLM URL: {self.critique_vllm_url}")
+            print(f"[EasyOPD] Context distillation enabled with vLLM URL: {self.critique_vllm_url}")
         if self.use_ref_solution_distillation:
-            print("[EasyOPD:G-OPD] Ref solution distillation enabled")
-        # ============ [EasyOPD:G-OPD] End ============
+            print("[EasyOPD] Ref solution distillation enabled")
+        # ============ [EasyOPD] End ============
+
+        # ============ [EasyOPD] Hook Dispatcher initialization ============
+        # The HookDispatcher provides a unified interface for method-specific
+        # logic. It coexists with the legacy if-branch approach during migration.
+        try:
+            from easyopd.hook_dispatch import HookDispatcher
+            from easyopd.diagnostics import MetricsCollector
+
+            self.hook_dispatcher = HookDispatcher.from_config(self.config)
+            if self.hook_dispatcher.enabled:
+                self.easyopd_metrics = MetricsCollector(
+                    method_name=self.hook_dispatcher.method_name,
+                )
+            else:
+                self.easyopd_metrics = None
+        except ImportError:
+            self.hook_dispatcher = None
+            self.easyopd_metrics = None
+        # ============ [EasyOPD] End ============
 
         # ============ [EasyOPD:OPSA] On-Policy Self-Distillation configuration ============
         self.opsa_enable = config.actor_rollout_ref.actor.get("opsa_enable", False)
@@ -671,7 +690,7 @@ class RayPPOTrainer:
 
         return stats
 
-    # ============ [EasyOPD:OPCD] Build context distillation batch ============
+    # ============ [EasyOPD] Build context distillation batch (OPCD) ============
     def _maybe_build_opcd_batch(self, batch):
         """Build experience-augmented teacher inputs for OPCD context distillation.
 
@@ -852,9 +871,9 @@ class RayPPOTrainer:
         return DataProto.from_dict(tensors={
             "exp_log_probs": exp_log_probs,
         }), metrics
-    # ============ [EasyOPD:OPCD] End ============
+    # ============ [EasyOPD] End ============
 
-    # ============ [EasyOPD:Vision-OPD] Build self-distillation batch ============
+    # ============ [EasyOPD] Build self-distillation batch (Vision-OPD) ============
     def _maybe_build_vision_opd_batch(
         self,
         batch,
@@ -1003,7 +1022,7 @@ class RayPPOTrainer:
             # Teacher image swap mode: use bbox_images for teacher
             teacher_image_key = self_distillation_cfg.get("teacher_image_key", "bbox_images")
             if teacher_image_key not in batch.non_tensor_batch:
-                print(f"[EasyOPD:Vision-OPD] Warning: teacher_image_key '{teacher_image_key}' not found in batch")
+                print(f"[EasyOPD] Warning: teacher_image_key '{teacher_image_key}' not found in batch")
                 return None
 
             fallback_to_policy_loss = self_distillation_cfg.get("fallback_to_policy_loss_on_missing_teacher", False)
@@ -1125,7 +1144,7 @@ class RayPPOTrainer:
             return DataProto.from_dict(tensors=tensors, non_tensors=non_tensors), metrics
 
         return None
-    # ============ [EasyOPD:Vision-OPD] End ============
+    # ============ [EasyOPD] End ============
 
     # ============ [EasyOPD:OPSA] Build self-distillation batch with privileged contexts ============
     def _maybe_build_opsa_batch(self, batch):
@@ -1476,41 +1495,78 @@ class RayPPOTrainer:
 
         response_mask = batch.batch["response_mask"]
 
-        # ============ [EasyOPD:SOD] Step-wise OPD weighting ============
+        # ============ [EasyOPD] Hook-based SOD dispatch ============
         stepwise_enable = getattr(cfg, "stepwise_enable", False)
         if stepwise_enable:
-            from easyopd.methods.sod.core import compute_stepwise_opd_weights
+            # Route to SOD method via hook dispatch if available
+            if self.hook_dispatcher is not None and self.hook_dispatcher.enabled:
+                from easyopd.methods.sod.core import compute_stepwise_opd_weights
 
-            raw_local_adv = (batch.batch["ref_log_prob"] - batch.batch["old_log_probs"]) * response_mask
-            epsilon = float(getattr(cfg, "stepwise_epsilon", 1e-6))
-            delta = float(getattr(cfg, "stepwise_delta", 0.5))
-            opd_coef = float(getattr(cfg, "stepwise_opd_coef", 1.0))
+                raw_local_adv = (batch.batch["ref_log_prob"] - batch.batch["old_log_probs"]) * response_mask
+                epsilon = float(getattr(cfg, "stepwise_epsilon", 1e-6))
+                delta = float(getattr(cfg, "stepwise_delta", 0.5))
+                opd_coef = float(getattr(cfg, "stepwise_opd_coef", 1.0))
 
-            stepwise_weights, stepwise_log_info = compute_stepwise_opd_weights(
-                old_log_probs=batch.batch["old_log_probs"],
-                ref_log_prob=batch.batch["ref_log_prob"],
-                response_mask=response_mask,
-                epsilon=epsilon,
-                delta=delta,
-            )
-            stepwise_weights = stepwise_weights.to(raw_local_adv.device)
+                stepwise_weights, stepwise_log_info = compute_stepwise_opd_weights(
+                    old_log_probs=batch.batch["old_log_probs"],
+                    ref_log_prob=batch.batch["ref_log_prob"],
+                    response_mask=response_mask,
+                    epsilon=epsilon,
+                    delta=delta,
+                )
+                stepwise_weights = stepwise_weights.to(raw_local_adv.device)
 
-            # Weighted OPD signal: w_k * (ref_log_prob - old_log_probs) per token
-            weighted_opd = opd_coef * stepwise_weights * raw_local_adv
+                weighted_opd = opd_coef * stepwise_weights * raw_local_adv
 
-            # Total advantage: A_GRPO (broadcast to token dim) + weighted OPD
-            grpo_adv = batch.batch["advantages"]
-            if grpo_adv.dim() == 1:
-                A_total_token = grpo_adv.unsqueeze(1) + weighted_opd
+                grpo_adv = batch.batch["advantages"]
+                if grpo_adv.dim() == 1:
+                    A_total_token = grpo_adv.unsqueeze(1) + weighted_opd
+                else:
+                    A_total_token = grpo_adv + weighted_opd
+
+                batch.batch["advantages"] = A_total_token
+                batch.meta_info.setdefault("token_kl_reg", {})
+                batch.meta_info["token_kl_reg"].update(
+                    {"stepwise_weights": stepwise_weights.detach().clone(), "local_adv": raw_local_adv.detach().clone()}
+                )
+
+                # Collect diagnostics via MetricsCollector
+                if self.easyopd_metrics is not None:
+                    self.easyopd_metrics.collect({
+                        "mean_step_weight": stepwise_weights[response_mask.bool()].mean().item() if response_mask.any() else 0.0,
+                    })
             else:
-                A_total_token = grpo_adv + weighted_opd
+                # Fallback: direct import (legacy path)
+                from easyopd.methods.sod.core import compute_stepwise_opd_weights
 
-            batch.batch["advantages"] = A_total_token
-            batch.meta_info.setdefault("token_kl_reg", {})
-            batch.meta_info["token_kl_reg"].update(
-                {"stepwise_weights": stepwise_weights.detach().clone(), "local_adv": raw_local_adv.detach().clone()}
-            )
-        # ============ [EasyOPD:SOD] End ============
+                raw_local_adv = (batch.batch["ref_log_prob"] - batch.batch["old_log_probs"]) * response_mask
+                epsilon = float(getattr(cfg, "stepwise_epsilon", 1e-6))
+                delta = float(getattr(cfg, "stepwise_delta", 0.5))
+                opd_coef = float(getattr(cfg, "stepwise_opd_coef", 1.0))
+
+                stepwise_weights, stepwise_log_info = compute_stepwise_opd_weights(
+                    old_log_probs=batch.batch["old_log_probs"],
+                    ref_log_prob=batch.batch["ref_log_prob"],
+                    response_mask=response_mask,
+                    epsilon=epsilon,
+                    delta=delta,
+                )
+                stepwise_weights = stepwise_weights.to(raw_local_adv.device)
+
+                weighted_opd = opd_coef * stepwise_weights * raw_local_adv
+
+                grpo_adv = batch.batch["advantages"]
+                if grpo_adv.dim() == 1:
+                    A_total_token = grpo_adv.unsqueeze(1) + weighted_opd
+                else:
+                    A_total_token = grpo_adv + weighted_opd
+
+                batch.batch["advantages"] = A_total_token
+                batch.meta_info.setdefault("token_kl_reg", {})
+                batch.meta_info["token_kl_reg"].update(
+                    {"stepwise_weights": stepwise_weights.detach().clone(), "local_adv": raw_local_adv.detach().clone()}
+                )
+        # ============ [EasyOPD] End ============
         else:
             # Legacy mode: sigmoid-gated beta blending
             raw_local_adv = (batch.batch["ref_log_prob"] - batch.batch["old_log_probs"]) * response_mask
@@ -2154,7 +2210,7 @@ class RayPPOTrainer:
                     if self.use_reference_policy:
                         # compute reference log_prob
                         with marked_timer("ref", timing_raw, color="olive"):
-                            # ============ [EasyOPD:G-OPD] Context distillation before ref log prob ============
+                            # ============ [EasyOPD] Context distillation before ref log prob ============
                             if self.use_context_distillation:
                                 from easyopd.methods.g_opd.ref_input_utils import prepare_critique_distillation_inputs
 
@@ -2183,7 +2239,7 @@ class RayPPOTrainer:
                                     tokenizer=self.tokenizer,
                                     apply_chat_template_kwargs=apply_chat_template_kwargs,
                                 )
-                            # ============ [EasyOPD:G-OPD] End ============
+                            # ============ [EasyOPD] End ============
 
                             if not self.ref_in_actor:
                                 ref_log_prob = self.ref_policy_wg.compute_ref_log_prob(batch)
@@ -2191,7 +2247,7 @@ class RayPPOTrainer:
                                 ref_log_prob = self.actor_rollout_wg.compute_ref_log_prob(batch)
                             batch = batch.union(ref_log_prob)
 
-                    # ============ [EasyOPD:G-OPD] Compute base model log probs for corrected reward ============
+                    # ============ [EasyOPD] Compute base model log probs for corrected reward ============
                     if self.use_base_models:
                         with marked_timer("base_log_probs", timing_raw, color="green"):
                             # Compute base_ref_log_prob using ref's base model
@@ -2218,10 +2274,10 @@ class RayPPOTrainer:
                             for key, tensor in ref_input_tensors.items():
                                 batch.batch[key] = tensor
 
-                            print(f"[EasyOPD:G-OPD] Computed base log probs: "
+                            print(f"[EasyOPD] Computed base log probs: "
                                   f"base_log_prob shape={batch.batch['base_log_prob'].shape}, "
                                   f"base_ref_log_prob shape={batch.batch['base_ref_log_prob'].shape}")
-                    # ============ [EasyOPD:G-OPD] End ============
+                    # ============ [EasyOPD] End ============
 
                     # compute values
                     if self.use_critic:
@@ -2282,7 +2338,7 @@ class RayPPOTrainer:
 
                     # implement critic warmup
                     if self.config.trainer.critic_warmup <= self.global_steps:
-                        # ============ [EasyOPD:Vision-OPD] Build self-distillation batch ============
+                        # ============ [EasyOPD] Build self-distillation batch ============
                         vopd_loss_mode = self.config.actor_rollout_ref.actor.policy_loss.get("loss_mode", "vanilla")
                         if vopd_loss_mode == "vopd":
                             vopd_result = self._maybe_build_vision_opd_batch(batch, reward_tensor)
@@ -2290,9 +2346,9 @@ class RayPPOTrainer:
                                 vopd_batch_data, vopd_metrics = vopd_result
                                 batch = batch.union(vopd_batch_data)
                                 metrics.update(vopd_metrics)
-                        # ============ [EasyOPD:Vision-OPD] End ============
+                        # ============ [EasyOPD] End ============
 
-                        # ============ [EasyOPD:OPCD] Context distillation - experience injection ============
+                        # ============ [EasyOPD] Context distillation - experience injection (OPCD) ============
                         opcd_stage = getattr(self.config.trainer, "stage", None)
                         if opcd_stage == "consolidate":
                             opcd_result = self._maybe_build_opcd_batch(batch)
@@ -2304,7 +2360,7 @@ class RayPPOTrainer:
                                 batch.meta_info["on_policy_merge"] = getattr(
                                     self.config.trainer, "on_policy_merge", True
                                 )
-                        # ============ [EasyOPD:OPCD] End ============
+                        # ============ [EasyOPD] End ============
 
                         # ============ [EasyOPD:OPSA] Teacher log-prob injection for self-distillation ============
                         if self.opsa_enable:

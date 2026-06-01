@@ -71,7 +71,18 @@ rollout:
   gpu_memory_utilization: 0.8
 
 data:
-  train_files: ["<path to training data>"]
-  val_files: ["<path to validation data>"]
+  # Option 1 (Recommended): Specify a HuggingFace dataset name.
+  # EasyOPD will automatically download, convert, and cache it.
+  dataset: "openai/gsm8k"
+  dataset_split: "train"
+  val_split: "test"
+  prompt_template: "math_qa"  # auto-converts to chat format
+  # max_samples: 1000  # uncomment to limit dataset size
+
+  # Option 2: Specify local Parquet files directly (overrides Option 1).
+  # train_files: ["/path/to/your/train.parquet"]
+  # val_files: ["/path/to/your/val.parquet"]
+
   prompt_key: content
+  max_prompt_length: 1024
   truncation: right

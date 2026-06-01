@@ -6,7 +6,10 @@
 
 from dataclasses import dataclass
 
+from easyopd.registry import register_method
 
+
+@register_method("simct")
 @dataclass(frozen=True)
 class SimCTMethod:
     """Static metadata describing the EasyOPD `simct` method."""
@@ -23,6 +26,7 @@ class SimCTMethod:
         "`span_ctkd`, using span virtual-vocabulary logits on top of the "
         "shared overlap vocabulary."
     )
+    paper_url: str = "https://arxiv.org/abs/2410.XXXXX"  # SimCT paper
 
 
 METHOD = SimCTMethod()

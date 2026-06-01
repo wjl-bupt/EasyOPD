@@ -6,6 +6,7 @@ SOD addresses the instability of standard OPD in tool-integrated reasoning (TIR)
 It adaptively re-weights the distillation strength at each reasoning step based on the divergence trajectory, preventing harmful supervision when cascade failures occur.
 
 **Paper:** https://arxiv.org/abs/2605.07725
+**Code:** https://github.com/YoungZ365/SOD/tree/main
 
 ---
 

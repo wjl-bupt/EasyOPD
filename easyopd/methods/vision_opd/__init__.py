@@ -36,6 +36,7 @@ from easyopd.methods.vision_opd.teacher_utils import (
     extract_images_from_messages,
     teacher_images_available,
 )
+from easyopd.registry import register_method
 
 __all__ = [
     "compute_self_distillation_loss",
@@ -51,6 +52,7 @@ __all__ = [
 ]
 
 
+@register_method("vision_opd")
 class VisionOPDMethod:
     """Vision-OPD: Learning to See Fine-Grained Details for Multimodal LLMs
     via On-Policy Self-Distillation.

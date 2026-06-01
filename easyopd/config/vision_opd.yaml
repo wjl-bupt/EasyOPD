@@ -75,8 +75,17 @@ rollout:
   calculate_log_probs: true
 
 data:
-  train_files: ["<path to training data>/train.parquet"]
-  val_files: []
+  # Option 1 (Recommended): HuggingFace dataset (auto-download + convert)
+  dataset: "HuggingFaceM4/DocumentVQA"
+  dataset_split: "train"
+  val_split: "validation"
+  prompt_template: "vision_qa"
+
+  # Option 2: Local Parquet files (overrides Option 1)
+  # train_files: ["/path/to/your/train.parquet"]
+  # val_files: []
+
+  prompt_key: content
   return_multi_modal_inputs: true
   image_key: images
   filter_overlong_prompts: false

@@ -32,6 +32,7 @@ from easyopd.methods.g_opd.ref_input_utils import (
     prepare_critique_distillation_inputs,
     prepare_ref_model_inputs_based_on_correct_solution,
 )
+from easyopd.registry import register_method
 
 __all__ = [
     "compute_g_opd_advantages",
@@ -44,6 +45,7 @@ __all__ = [
 ]
 
 
+@register_method("g_opd")
 class GOPDMethod:
     """G-OPD: Generalized On-Policy Distillation with Reward Extrapolation.
 

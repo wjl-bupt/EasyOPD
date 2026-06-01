@@ -49,5 +49,16 @@ rollout:
   max_response_length: 20480
 
 data:
-  train_files: ["<path to RL training data>"]
-  val_files: ["<path to eval data>"]
+  # Option 1 (Recommended): HuggingFace dataset (auto-download + convert)
+  dataset: "jxu124/OpenAgentInstruct"
+  dataset_split: "train"
+  val_split: "test"
+  prompt_template: "agent"
+
+  # Option 2: Local Parquet files (overrides Option 1)
+  # train_files: ["/path/to/your/train.parquet"]
+  # val_files: ["/path/to/your/val.parquet"]
+
+  prompt_key: content
+  max_prompt_length: 2560
+  truncation: right
