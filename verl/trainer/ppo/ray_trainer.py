@@ -319,6 +319,13 @@ def compute_advantage(
             adv_kwargs["index"] = data.non_tensor_batch["uid"]
         if "reward_baselines" in data.batch:  # optional
             adv_kwargs["reward_baselines"] = data.batch["reward_baselines"]
+        # [EasyOPD:lightning_opd] Pass offline distillation tensors through to
+        # the custom advantage estimator when Lightning-OPD is selected.
+        adv_name = getattr(adv_estimator, "value", adv_estimator)
+        if adv_name == "on_policy_distillation":
+            adv_kwargs["old_log_probs"] = data.batch["old_log_probs"]
+            adv_kwargs["teacher_log_probs"] = data.batch.get("teacher_log_probs")
+        # [EasyOPD:lightning_opd] End
 
         # calculate advantage estimator
         advantages, returns = adv_estimator_fn(**adv_kwargs)
@@ -2278,6 +2285,14 @@ class RayPPOTrainer:
                                   f"base_log_prob shape={batch.batch['base_log_prob'].shape}, "
                                   f"base_ref_log_prob shape={batch.batch['base_ref_log_prob'].shape}")
                     # ============ [EasyOPD] End ============
+
+                    # [EasyOPD:lightning_opd] Convert teacher_log_probs from
+                    # non-tensor (ragged list from parquet) to padded tensor.
+                    if "teacher_log_probs" in getattr(batch, "non_tensor_batch", {}):
+                        from easyopd.methods.lightning_opd.data_adapter import attach_teacher_log_probs
+
+                        attach_teacher_log_probs(batch)
+                    # [EasyOPD:lightning_opd] End
 
                     # compute values
                     if self.use_critic:

@@ -1,0 +1,41 @@
+# Lightning-OPD SFT warmup configuration.
+#
+# This config is a verl fsdp_sft_trainer translation of the SFT recipe
+# from Lightning-OPD paper §3.2 and the source repository's LlamaFactory
+# config (configs/sft/qwen3-4b-base-open-thoughts3-qwen3-8b.yaml).
+#
+# Key fields (total_training_steps / lr / packing) are the minimum
+# necessary to reproduce reported numbers.  Any modification to these
+# fields should go through spec review.
+#
+# Reference: arXiv:2604.13010 §3.2 "Supervised Fine-Tuning Warmup"
+# Source config: LlamaFactory YAML with DeepSpeed ZeRO-0
+
+trainer:
+  total_training_steps: 3000  # paper §3.2: 3000 SFT steps
+  save_freq: 500
+  test_freq: 100
+
+optim:
+  lr: 8.0e-5  # paper §3.2: lr=8e-5
+  warmup_steps: 100
+  weight_decay: 0.01
+
+data:
+  train_batch_size: 256  # paper §3.2: effective batch size 256
+  use_dynamic_bsz: True  # dynamic batch sizing with packing
+  max_length: 32768  # max sequence length (prompt + response)
+
+model:
+  # enable_packing: True  # verl fsdp_sft_trainer may use a different key;
+  #   if so, map here.  Packing is essential for the §3.2 recipe.
+  # path: <SFT base model>  # set via CLI override
+  use_remove_padding: True
+  enable_gradient_checkpointing: True
+
+# Notes on fields that do NOT map 1:1 from LlamaFactory:
+# - LlamaFactory `deepspeed`: not needed; verl uses FSDP by default.
+# - LlamaFactory `packing`: verl equivalent is `use_remove_padding` +
+#   dynamic batch sizing.  Verify during Phase 5 GPU validation.
+# - LlamaFactory `cutoff_len`: mapped to `data.max_length`.
+# - LlamaFactory `num_train_epochs`: verl uses `total_training_steps`.

@@ -137,6 +137,26 @@ DATASET_RECIPES: dict[str, dict[str, Any]] = {
             "instruction-style dataset that exposes a prompt field."
         ),
     },
+    "lightning_opd": {
+        "dataset": "open-thoughts/OpenThoughts3-1.2M",
+        "dataset_split": "train",
+        "prompt_template": "math_qa",
+        "description": (
+            "Lightning-OPD (offline on-policy distillation) consumes a "
+            "parquet dataset that, in addition to a `prompt` field, "
+            "carries a precomputed `teacher_log_probs` column produced "
+            "by `examples/lightning_opd_trainer/tools/generate_sft_data.sh`. "
+            "Per the paper (arXiv:2604.13010 §3), the SFT teacher and "
+            "the OPD teacher MUST be the same model; the data-prep "
+            "pipeline enforces this via "
+            "`easyopd.methods.lightning_opd.teacher_consistency` and "
+            "raises if `teacher_log_probs` is missing at training "
+            "time. OpenThoughts3-1.2M is the default reasoning corpus "
+            "used by the upstream NVIDIA-NeMo Lightning-OPD reference; "
+            "users may override `data.dataset` to any HF dataset that "
+            "carries a prompt and matching teacher log-probs column."
+        ),
+    },
     "vision_opd": {
         "dataset": "HuggingFaceM4/DocumentVQA",
         "dataset_split": "train",
