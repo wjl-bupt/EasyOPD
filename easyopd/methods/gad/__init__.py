@@ -16,7 +16,10 @@
 
 from dataclasses import dataclass
 
+from easyopd.registry import register_method
 
+
+@register_method("gad")
 @dataclass(frozen=True)
 class GADMethod:
     """Static metadata describing the EasyOPD `gad` method."""
@@ -30,6 +33,13 @@ class GADMethod:
         "responses; the discriminator's last-token output drives the "
         "standard PPO advantage / actor update."
     )
+    # Integration capabilities surfaced for the EasyOPD framework registry.
+    # GAD is unique among the unified methods in that it modifies the PPO
+    # *critic* (turning it into a Bradley-Terry discriminator) instead of
+    # the actor loss / reward manager / teacher sidecar. The actor side
+    # uses verl's standard PPO loss unchanged.
+    capabilities: tuple = ("critic",)
+    integration_mode: str = "critic-as-discriminator"
 
 
 METHOD = GADMethod()
