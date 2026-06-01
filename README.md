@@ -3,6 +3,7 @@
 <p align="center">
   <a href="https://arxiv.org/abs/xxxx.xxxxx"><img src="https://img.shields.io/badge/arXiv-Paper-red.svg" alt="Paper"></a>
   <a href="https://github.com/lds-ustc/EasyOPD"><img src="https://img.shields.io/badge/GitHub-Code-blue.svg" alt="Code"></a>
+  <a href="https://github.com/lds-ustc/EasyOPD/actions/workflows/easyopd_framework.yml"><img src="https://github.com/lds-ustc/EasyOPD/actions/workflows/easyopd_framework.yml/badge.svg?branch=main" alt="EasyOPD Framework CI"></a>
   <a href="#quick-start"><img src="https://img.shields.io/badge/Quick-Start-green.svg" alt="Quick Start"></a>
 </p>
 
