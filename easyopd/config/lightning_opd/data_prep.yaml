@@ -1,0 +1,6 @@
+# Lightning-OPD data preparation defaults.
+# Used by prepare_data.sh / prepare.py.
+
+max_response_len: 4096
+concurrency: 64
+teacher_url: "http://127.0.0.1:8000/v1/completions"
