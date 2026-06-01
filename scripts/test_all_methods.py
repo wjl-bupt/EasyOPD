@@ -149,19 +149,38 @@ def test_method_metadata():
 
 
 def test_config_loading():
-    """Test that all method configs can be loaded."""
+    """Test that all method configs can be loaded.
+
+    After the config-layout polish (see `easyopd/config/{gad,ropd,lightning_opd}.yaml`),
+    every registered method MUST have a top-level `easyopd/config/{name}.yaml`
+    entry that `EasyOPD.from_hparams(name)` can load without an explicit
+    `config_path`.  No silent-skip is allowed.
+    """
     from easyopd import EasyOPD
 
     config_dir = PROJECT_ROOT / "easyopd" / "config"
 
     for method_name in EXPECTED_METHODS:
         config_path = config_dir / f"{method_name}.yaml"
-        if config_path.exists():
-            instance = EasyOPD.from_hparams(
-                method_name, config_path=str(config_path), auto_resolve_data=False
-            )
-            assert isinstance(instance.config, dict)
-            assert len(instance.config) > 0, f"Config for '{method_name}' is empty"
+        assert config_path.exists(), (
+            f"Method '{method_name}' is missing a top-level default config at "
+            f"{config_path}.  Every registered method MUST expose an EasyOPD "
+            f"entry config so that `EasyOPD.from_hparams('{method_name}')` "
+            f"works without an explicit config_path."
+        )
+        # 1) Explicit-path load
+        instance = EasyOPD.from_hparams(
+            method_name, config_path=str(config_path), auto_resolve_data=False
+        )
+        assert isinstance(instance.config, dict)
+        assert len(instance.config) > 0, f"Config for '{method_name}' is empty"
+        # 2) Default-path load (no config_path arg) — exercises the
+        #    `_CONFIG_DIR / f"{method_name}.yaml"` fallback in `from_hparams`.
+        default_instance = EasyOPD.from_hparams(method_name, auto_resolve_data=False)
+        assert isinstance(default_instance.config, dict)
+        assert len(default_instance.config) > 0, (
+            f"Default config for '{method_name}' is empty"
+        )
 
 
 def test_hook_interfaces():

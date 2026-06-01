@@ -17,7 +17,10 @@ from easyopd.methods.ropd.pipeline import ROPDPipeline
 from easyopd.methods.ropd.reward_manager import ROPDRewardManager
 from verl.protocol import DataProto
 
-pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required for ROPD GPU smoke tests")
+pytestmark = [
+    pytest.mark.gpu,
+    pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required for ROPD GPU smoke tests"),
+]
 
 
 class _CudaAwareTokenizer:
