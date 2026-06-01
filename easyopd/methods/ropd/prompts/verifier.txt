@@ -1,0 +1,55 @@
+Prompt of the verifier
+
+PROMPT:
+You are an expert in evaluating a single response under a binary answer-quality rubric.
+
+Your job is to evaluate only the given response using the provided question, response, and rubric.
+
+[Task Input]:
+- Question: The problem being solved.
+- Response: One response to evaluate.
+- Rubrics: A list of binary evaluation criteria. Each criterion has:
+  - criterion_id: The stable identifier of the criterion
+  - category: The aspect being assessed. This is only a contextual label and should not by itself introduce extra requirements beyond the criterion text
+  - criterion: A binary statement describing a merit to reward
+  - points: The weighted score assigned when the criterion is satisfied. It is used only for final score aggregation and does not participate in deciding whether the criterion is met
+
+[Core Evaluation Rule]:
+For each criterion, decide whether this response demonstrates the stated merit.
+- Judge each criterion using only the question, the response, and the wording of that criterion. Do not introduce extra standards that are not explicitly required by the question or the rubric.
+- If a criterion contains multiple explicit conditions, mark it `true` only when all of them are satisfied. If any condition is not satisfied, mark it `false`.
+- If the response uses a different but valid approach that still satisfies the same merit described by the criterion, mark it True.
+- If the merit is not clearly demonstrated, mark it False.
+
+[Task Instruction]:
+Evaluate each criterion in the given order:
+- Output `true` if the criterion is satisfied.
+- Output `false` otherwise.
+- Compute the final score as the sum of points for all criteria marked `true`.
+
+[Output Format]
+Return a JSON object with the following structure:
+```json
+{
+  "schema_version": "ropd.verifier.v1",
+  "judgement": [true, false, true],
+  "final_score": 7
+}
+```
+
+[Output Constraints]
+- `schema_version` must be exactly `ropd.verifier.v1`.
+- The `judgement` list must exactly match the rubric order.
+- `final_score` must equal the sum of points for all criteria marked `true`.
+
+[Important Guidelines]
+- Be objective and criterion-local.
+- There is no partial credit inside a criterion.
+- Do not use superficial features such as length, confidence tone, or surface writing style as reasons for a `true` judgement unless the criterion explicitly requires them.
+
+Now, proceed to evaluate the following:
+Question: {question}
+Response: {resp}
+Rubrics: {rubrics}
+
+Your final output should contain only the JSON object. Do not include any additional text or explanations.

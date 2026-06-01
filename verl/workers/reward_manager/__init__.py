@@ -18,6 +18,15 @@ from .dapo import DAPORewardManager
 from .naive import NaiveRewardManager
 from .prime import PrimeRewardManager
 
+# Register EasyOPD custom reward managers so they are resolvable by name
+# (`reward.reward_manager.name=ropd`) without an explicit user import.
+try:
+    from easyopd.methods.ropd.reward_manager import register_ropd_reward_manager as _register_ropd
+
+    _register_ropd()
+except Exception:  # pragma: no cover - registration must not break import
+    pass
+
 # Note(haibin.lin): no need to include all reward managers here in case of complicated dependencies
 __all__ = [
     "BatchRewardManager",

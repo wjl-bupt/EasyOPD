@@ -1,0 +1,29 @@
+# EasyOPD `ropd` — SFT placeholder template
+#
+# This template is a starting point for an optional offline-policy SFT
+# warmup that re-uses the ROPD teacher index. The first-phase migration does
+# NOT wire this template into an example launcher — see the migration spec for
+# the rationale. Implementers should treat this file as a documented template:
+# the keys below match what a future `examples/ropd_trainer/sft_warmup.sh`
+# would consume.
+
+defaults:
+  - _self_
+
+# ---------- student model & tokenizer ---------- #
+student_model_path: Qwen/Qwen2.5-7B-Instruct
+student_tokenizer_path: Qwen/Qwen2.5-7B-Instruct
+
+# ---------- supervised data ---------- #
+data:
+  train_files: []
+  val_files: []
+  prompt_key: prompt
+  response_key: teacher_answer
+  max_length: 4096
+
+# ---------- training ---------- #
+trainer:
+  total_epochs: 1
+  default_local_dir: outputs/ropd/sft
+  logger: ["console"]

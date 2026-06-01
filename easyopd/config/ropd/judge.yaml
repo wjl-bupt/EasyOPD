@@ -1,0 +1,30 @@
+# EasyOPD `ropd` — judge / provider resolution overrides
+#
+# These settings are merged into `reward_model.reward_kwargs.ropd` by the
+# canonical launcher. Provider profiles, role models, retry budgets, and
+# scheduler knobs all live in `easyopd/config/ropd/judge_providers.yaml`;
+# this file only carries the ROPD-specific reward-manager knobs.
+
+reward_model:
+  reward_kwargs:
+    ropd:
+      max_group_concurrency: 4
+      max_pair_concurrency: 8
+      max_verifier_subject_concurrency: 2
+      provider_resolution:
+        spec_path: easyopd/config/ropd/judge_providers.yaml
+        entrypoint: train
+      reward_quality_gate:
+        enabled: true
+        max_fallback_rate: 0.09375
+        max_retry_rounds: 3
+        retry_pair_concurrency: 2
+        min_group_size_after_exclusion: 2
+        max_dropped_pairs_per_group: 3
+        min_effective_group_rate: 0.75
+      request_scheduler:
+        num_workers: 16
+        max_queue_size: 256
+      debug:
+        text_artifact_mode: diagnostic_only
+        retention_days: 14
