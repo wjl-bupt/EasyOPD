@@ -53,3 +53,19 @@ distillation:
 # Same-tokenizer fallback (e.g. quick sanity check):
 #   set teacher_model_path == student_model_path and the alignment falls
 #   into the identity fast path, so simple ≈ full-vocab forward KL.
+
+# ---------- data ---------- #
+data:
+  # Option 1 (Recommended): HuggingFace dataset (auto-download + convert)
+  dataset: "openai/gsm8k"
+  dataset_split: "train"
+  val_split: "test"
+  prompt_template: "math_qa"
+
+  # Option 2: Local Parquet files (overrides Option 1)
+  # train_files: ["/path/to/your/train.parquet"]
+  # val_files: ["/path/to/your/val.parquet"]
+
+  prompt_key: content
+  max_prompt_length: 1024
+  truncation: right

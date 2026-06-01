@@ -1,0 +1,75 @@
+# OPCD: On-Policy Context Distillation for Language Models
+# Paper: https://arxiv.org/abs/2602.12275
+#
+# This config defines the OPCD-specific parameters for EasyOPD.
+# Use with: bash examples/opcd/run_opcd_math.sh
+
+method:
+  name: opcd
+  description: "OPCD: On-Policy Context Distillation for Language Models"
+
+model:
+  # Student and teacher use the same model (teacher gets context in prompt)
+  model_path: "Qwen/Qwen3-8B"
+  # Optional: use a different (larger) model as teacher
+  ref_model_path: null  # If null, uses same as model_path
+
+training:
+  # verl standard training parameters
+  adv_estimator: grpo
+  loss_agg_mode: token-mean
+  actor_lr: 5e-6
+  train_batch_size: 128
+  ppo_mini_batch_size: 128
+  rollout_n: 1
+  total_epochs: 1
+  total_training_steps: 50
+
+  # OPCD-specific parameters
+  opcd:
+    # KL loss type: "full", "kl", "abs", "mse", "low_var_kl", "seqkd"
+    # "full" = full KL divergence over vocabulary (recommended)
+    kl_loss_type: full
+
+    # Top-K for memory-efficient full KL (0 = use all vocab)
+    kl_topk: 256
+
+    # Whether to renormalize top-k log-probs before KL computation
+    kl_renorm_topk: false
+
+    # Training stage: "consolidate" for knowledge consolidation
+    stage: consolidate
+
+    # On-policy merge: student generates, teacher provides logits
+    on_policy_merge: true
+
+    # Path to experience file (extracted knowledge)
+    experience_path: null
+
+    # Maximum token length for experience text
+    experience_max_length: 16384
+
+    # Whether to use system prompt mode (vs user content injection)
+    train_system_prompt: false
+
+rollout:
+  max_prompt_length: 17408  # max_response_length + 1024
+  max_response_length: 16384
+  temperature: 0.6
+  n: 1
+  gpu_memory_utilization: 0.8
+
+data:
+  # Option 1 (Recommended): HuggingFace dataset (auto-download + convert)
+  dataset: "openai/gsm8k"
+  dataset_split: "train"
+  val_split: "test"
+  prompt_template: "math_qa"
+
+  # Option 2: Local Parquet files (overrides Option 1)
+  # train_files: ["/path/to/dapo_train.parquet"]
+  # val_files: ["/path/to/dapo_test.parquet"]
+
+  prompt_key: content
+  max_prompt_length: 1024
+  truncation: right

@@ -1,0 +1,92 @@
+# Vision-OPD: Learning to See Fine-Grained Details for Multimodal LLMs
+# via On-Policy Self-Distillation
+# Paper: https://arxiv.org/abs/2605.18740
+#
+# This config defines the Vision-OPD-specific parameters for EasyOPD.
+# Use with: bash examples/vision_opd/run_vision_opd.sh
+
+method:
+  name: vision_opd
+  description: "Vision-OPD: On-Policy Self-Distillation for Fine-Grained Visual Perception"
+
+model:
+  # Student/Teacher model (same architecture, teacher is EMA of student)
+  model_path: "Qwen/Qwen3.5-4B"
+
+training:
+  # verl standard training parameters
+  adv_estimator: grpo
+  norm_adv_by_std_in_grpo: false
+  loss_agg_mode: token-mean
+  actor_lr: 2e-6
+  train_batch_size: 96
+  ppo_mini_batch_size: 96
+  rollout_n: 8
+  total_epochs: 1
+
+  # Vision-OPD-specific parameters
+  vision_opd:
+    # Policy loss mode: "vopd" enables self-distillation
+    loss_mode: vopd
+
+    # Self-distillation configuration
+    self_distillation:
+      # Full-logit distillation with top-k for memory efficiency
+      full_logit_distillation: true
+      distillation_topk: 100
+      distillation_add_tail: true
+
+      # KL interpolation: 0.0=forward KL, 1.0=reverse KL, 0.5=JSD
+      alpha: 0.5
+
+      # IS ratio clipping for stability
+      is_clip: 2.0
+
+      # Teacher regularization: "ema", "trust-region", or "progressive"
+      teacher_regularization: ema
+      teacher_update_rate: 0.05
+
+      # Teacher model source: "legacy" (EMA of student), "current", or "fixed"
+      teacher_model_source: legacy
+
+      # Teacher always on: distill every sample from teacher
+      teacher_always_on: true
+
+      # Teacher image key: dataset column holding teacher-side images
+      teacher_image_key: bbox_images
+
+      # Max reprompt length for teacher inputs
+      max_reprompt_len: 10240
+
+      # Don't reprompt on self-success (for SDPO mode)
+      dont_reprompt_on_self_success: true
+
+  # Rollout correction (token-level IS weights)
+  rollout_correction:
+    rollout_is: token
+    rollout_is_threshold: 2.0
+
+rollout:
+  max_prompt_length: 8192
+  max_response_length: 1024
+  temperature: 1.0
+  top_p: 1.0
+  n: 8
+  calculate_log_probs: true
+
+data:
+  # Option 1 (Recommended): HuggingFace dataset (auto-download + convert)
+  dataset: "HuggingFaceM4/DocumentVQA"
+  dataset_split: "train"
+  val_split: "validation"
+  prompt_template: "vision_qa"
+
+  # Option 2: Local Parquet files (overrides Option 1)
+  # train_files: ["/path/to/your/train.parquet"]
+  # val_files: []
+
+  prompt_key: content
+  return_multi_modal_inputs: true
+  image_key: images
+  filter_overlong_prompts: false
+  truncation: error

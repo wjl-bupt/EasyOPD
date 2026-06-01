@@ -1,0 +1,73 @@
+# G-OPD: Generalized On-Policy Distillation with Reward Extrapolation
+# Paper: https://arxiv.org/abs/2602.12125
+#
+# This config defines the G-OPD-specific parameters for EasyOPD.
+# Use with: bash examples/g_opd/run_g_opd.sh
+
+method:
+  name: g_opd
+  description: "G-OPD: Generalized On-Policy Distillation with Reward Extrapolation"
+
+model:
+  # Student model (HuggingFace format)
+  student_model_path: "<Your_Student_Model_Path>"
+  # Teacher model (HuggingFace format, e.g., a stronger RL-trained model)
+  teacher_model_path: "<Your_Teacher_Model_Path>"
+  # Base/reference model for reward normalization (typically student's initial state)
+  base_model_path: "<Your_Base_Model_Path>"
+
+training:
+  # verl standard training parameters
+  adv_estimator: grpo
+  loss_agg_mode: token-mean
+  actor_lr: 1e-5
+  train_batch_size: 1024
+  ppo_mini_batch_size: 1024
+  n_resp_per_prompt: 1
+  total_epochs: 3
+
+  # G-OPD-specific parameters
+  g_opd:
+    # Enable on-policy distillation (use reverse KL as advantages)
+    only_reverse_kl_advantages: true
+    # Reward scaling factor (lambda):
+    #   lambda=1.0: standard OPD
+    #   lambda>1.0: ExOPD (reward extrapolation, recommended: 1.25)
+    #   lambda<1.0: G-OPD (dampened teacher signal)
+    lambda_vals: 1.25
+    # Multi-teacher distillation (requires opd_teacher field in data)
+    multi_teacher_distill: false
+
+  # Context distillation (optional, for on-policy self/context-distillation)
+  context_distillation:
+    # Enable critique-based context distillation
+    critique_vllm_url: null  # Set to vLLM server URL to enable
+    critique_model: null
+    max_critique_tokens: 2048
+    critique_temperature: 0.0
+    critique_top_p: 1.0
+    # Enable ref_solution-based context distillation
+    use_ref_solution_distillation: false
+
+rollout:
+  max_prompt_length: 2048
+  max_response_length: 16384
+  temperature: 1.0
+  top_p: 1.0
+  n: 1
+
+data:
+  # Option 1 (Recommended): HuggingFace dataset (auto-download + convert)
+  dataset: "openai/gsm8k"
+  dataset_split: "train"
+  val_split: "test"
+  prompt_template: "math_qa"
+
+  # Option 2: Local Parquet files (overrides Option 1)
+  # train_files: ["/path/to/your/train.parquet"]
+  # val_files: ["/path/to/your/val.parquet"]
+
+  prompt_key: content
+  max_prompt_length: 1024
+  truncation: right
+  return_raw_chat: true  # Required for context distillation

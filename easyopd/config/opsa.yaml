@@ -1,0 +1,74 @@
+# OPSA: Reducing the Safety Tax in LLM Safety Alignment with On-Policy Self-Distillation
+# Paper: https://arxiv.org/abs/2605.15239
+# Code: https://github.com/FYYFU/OPSA
+#
+# On-policy self-distillation for safety alignment. Uses the same base model
+# as both teacher (frozen, with privileged context) and student (on-policy,
+# without context). Concentrates per-token KL supervision on the early
+# "refusal-decision window" to minimize safety tax on reasoning ability.
+#
+# Usage: bash examples/opsa/run_opsa.sh
+
+method:
+  name: opsa
+  description: "OPSA: On-Policy Self-Distillation for Safety Alignment"
+
+model:
+  # Self-distillation: teacher is a frozen copy of the same model
+  model_path: "Qwen/Qwen3-1.7B"
+  ref_model_path: null  # Teacher = frozen copy of model_path
+
+training:
+  adv_estimator: grpo
+  loss_agg_mode: token-mean
+  actor_lr: 5e-6
+  train_batch_size: 128
+  ppo_mini_batch_size: 128
+  rollout_n: 1
+  total_epochs: 3
+  total_training_steps: 200
+
+  # OPSA-specific parameters
+  opsa:
+    # Loss configuration
+    distillation_loss_coef: 1.0
+    temperature: 1.0
+    loss_agg_mode: token-mean
+
+    # Early refusal-decision window
+    use_window_weighting: true
+    window_size: 32
+    decay_type: linear        # Options: linear, step, exponential
+    min_weight: 0.1
+
+    # Privileged context configuration
+    privileged_contexts:
+      harmful_context: "You are a helpful and safe AI assistant. When you encounter a harmful, dangerous, or unethical request, you MUST refuse clearly and explain why. Safety is your highest priority."
+      benign_context: "You are a helpful AI assistant. Respond to the user's request directly and helpfully. Do not over-refuse safe and reasonable requests."
+      context_search_method: tfr  # Use Teacher Flip Rate for context selection
+
+    # Teacher Flip Rate (TFR) parameters
+    teacher_flip_rate:
+      tfr_threshold: 0.8         # Contexts must flip >=80% unsafe responses to safe
+      tfr_sample_size: 100       # Number of samples for TFR evaluation
+      tfr_eval_frequency: 10     # Re-evaluate TFR every N training steps
+
+    # Safety data configuration
+    use_safety_labels: true      # Data must include harmful/benign labels
+    label_ratios:
+      harmful: 0.5
+      benign: 0.5
+
+rollout:
+  max_prompt_length: 1024
+  max_response_length: 1024
+  temperature: 1.0
+  n: 1
+  gpu_memory_utilization: 0.8
+
+data:
+  # SafeChain dataset (UWNSL/SafeChain) or per-model ThinkSafe
+  train_files: ["<path to SafeChain or ThinkSafe train data>"]
+  val_files: ["<path to safety evaluation data>"]
+  prompt_key: content
+  truncation: right

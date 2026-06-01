@@ -425,6 +425,92 @@ class RayPPOTrainer:
         # if ref_in_actor is True, the reference policy will be actor without lora applied
         self.ref_in_actor = config.actor_rollout_ref.model.get("lora_rank", 0) > 0
 
+        # ============ [EasyOPD] Context distillation and base model configuration ============
+        # Context distillation (critique-based)
+        self.critique_vllm_url = config.algorithm.get("critique_vllm_url", None)
+        self.use_context_distillation = self.critique_vllm_url is not None
+        self.critique_model = config.algorithm.get("critique_model", None)
+        self.max_critique_tokens = config.algorithm.get("max_critique_tokens", 2048)
+        self.critique_temperature = config.algorithm.get("critique_temperature", 0.0)
+        self.critique_top_p = config.algorithm.get("critique_top_p", 1.0)
+
+        # Ref solution distillation
+        self.use_ref_solution_distillation = config.algorithm.get("use_ref_solution_distillation", False)
+
+        if self.use_context_distillation or self.use_ref_solution_distillation:
+            return_raw_chat = config.data.get("return_raw_chat", False)
+            if not return_raw_chat:
+                raise ValueError(
+                    "When using context distillation (critique_vllm_url is provided) "
+                    "or ref solution distillation (use_ref_solution_distillation=True), "
+                    "you must set data.return_raw_chat=True in config."
+                )
+
+        # Base model paths for G-OPD corrected reward computation
+        self.base_model_path = config.actor_rollout_ref.model.get("base_model_path", None)
+        self.ref_base_model_path = config.actor_rollout_ref.ref.get("model", None)
+        if self.ref_base_model_path is not None:
+            self.ref_base_model_path = self.ref_base_model_path.get("base_model_path", None)
+        self.use_base_models = self.base_model_path is not None and self.ref_base_model_path is not None
+
+        if self.use_base_models:
+            print(f"[EasyOPD] Corrected reward enabled with base models:")
+            print(f"  Actor base model: {self.base_model_path}")
+            print(f"  Ref base model: {self.ref_base_model_path}")
+        if self.use_context_distillation:
+            print(f"[EasyOPD] Context distillation enabled with vLLM URL: {self.critique_vllm_url}")
+        if self.use_ref_solution_distillation:
+            print("[EasyOPD] Ref solution distillation enabled")
+        # ============ [EasyOPD] End ============
+
+        # ============ [EasyOPD] Hook Dispatcher initialization ============
+        # The HookDispatcher provides a unified interface for method-specific
+        # logic. It coexists with the legacy if-branch approach during migration.
+        try:
+            from easyopd.hook_dispatch import HookDispatcher
+            from easyopd.diagnostics import MetricsCollector
+
+            self.hook_dispatcher = HookDispatcher.from_config(self.config)
+            if self.hook_dispatcher.enabled:
+                self.easyopd_metrics = MetricsCollector(
+                    method_name=self.hook_dispatcher.method_name,
+                )
+            else:
+                self.easyopd_metrics = None
+        except ImportError:
+            self.hook_dispatcher = None
+            self.easyopd_metrics = None
+        # ============ [EasyOPD] End ============
+
+        # ============ [EasyOPD:OPSA] On-Policy Self-Distillation configuration ============
+        self.opsa_enable = config.actor_rollout_ref.actor.get("opsa_enable", False)
+        if self.opsa_enable:
+            self.opsa_harmful_context = config.actor_rollout_ref.actor.get(
+                "opsa_harmful_context",
+                "You are a helpful and safe AI assistant. When you encounter a harmful, dangerous, or unethical request, you MUST refuse clearly and explain why. Safety is your highest priority."
+            )
+            self.opsa_benign_context = config.actor_rollout_ref.actor.get(
+                "opsa_benign_context",
+                "You are a helpful AI assistant. Respond to the user's request directly and helpfully. Do not over-refuse safe and reasonable requests."
+            )
+            # TFR: how often the privileged context flips an unsafe response to safe.
+            # Tracked as a proxy via teacher vs. student log-prob gap on harmful samples.
+            self.opsa_tfr_eval_frequency = int(
+                config.actor_rollout_ref.actor.get("opsa_tfr_eval_frequency", 10)
+            )
+            self.opsa_tfr_threshold = float(
+                config.actor_rollout_ref.actor.get("opsa_tfr_threshold", 0.8)
+            )
+            # Rolling buffer: (teacher_lp_mean, student_lp_mean) for harmful samples
+            self._opsa_tfr_buffer: list = []
+            print(
+                f"[EasyOPD:OPSA] On-Policy Self-Distillation enabled | "
+                f"window_size={config.actor_rollout_ref.actor.get('opsa_window_size', 32)} | "
+                f"tfr_eval_frequency={self.opsa_tfr_eval_frequency} | "
+                f"tfr_threshold={self.opsa_tfr_threshold}"
+            )
+        # ============ [EasyOPD:OPSA] End ============
+
         # define in-reward KL control
         # kl loss control currently not suppoorted
         if self.config.algorithm.use_kl_in_reward:
@@ -604,6 +690,694 @@ class RayPPOTrainer:
 
         return stats
 
+    # ============ [EasyOPD] Build context distillation batch (OPCD) ============
+    def _maybe_build_opcd_batch(self, batch):
+        """Build experience-augmented teacher inputs for OPCD context distillation.
+
+        In OPCD's consolidate stage:
+        1. Load experience from file (or from batch metadata)
+        2. Inject experience into prompts to create teacher prompts
+        3. Tokenize teacher prompts + student responses
+        4. Compute teacher (ref model) log-probs on the augmented prompts
+        5. Return exp_log_probs for KL loss computation in dp_actor
+
+        Returns:
+            Optional tuple of (DataProto with exp_log_probs, metrics dict), or None.
+        """
+        from verl import DataProto
+        from easyopd.methods.opcd.core import build_experience_prompt, truncate_experience
+        import json
+        import os
+
+        experience_path = getattr(self.config.trainer, "experience_path", None)
+        if experience_path is None:
+            return None
+
+        train_system_prompt = getattr(self.config.trainer, "train_system_prompt", False)
+        experience_max_length = getattr(self.config.trainer, "experience_max_length", 16384)
+
+        # Load experiences from file
+        experiences = {}
+        if experience_path and os.path.exists(experience_path):
+            with open(experience_path, "r") as f:
+                exp_data = json.load(f)
+            if isinstance(exp_data, dict):
+                experiences = exp_data
+            elif isinstance(exp_data, list):
+                for item in exp_data:
+                    if isinstance(item, dict) and "prompt" in item and "experience" in item:
+                        experiences[item["prompt"]] = item["experience"]
+
+        batch_size = batch.batch["input_ids"].shape[0]
+        device = batch.batch["input_ids"].device
+
+        # Build teacher prompts with experience injected
+        has_experience_count = 0
+        exp_prompts = []
+
+        for i in range(batch_size):
+            raw_prompt = batch.non_tensor_batch.get("raw_prompt", [None] * batch_size)[i]
+            prompt_text = ""
+            if raw_prompt is not None:
+                if isinstance(raw_prompt, (list, tuple)):
+                    # Chat messages format
+                    for msg in raw_prompt:
+                        if isinstance(msg, dict) and msg.get("role") == "user":
+                            content = msg.get("content", "")
+                            if isinstance(content, str):
+                                prompt_text = content
+                            break
+                elif isinstance(raw_prompt, str):
+                    prompt_text = raw_prompt
+
+            # Find matching experience
+            experience = ""
+            if prompt_text in experiences:
+                experience = experiences[prompt_text]
+            elif experiences:
+                # Try partial match or use first available
+                for key in experiences:
+                    if key in prompt_text or prompt_text in key:
+                        experience = experiences[key]
+                        break
+
+            if experience:
+                experience = truncate_experience(
+                    experience, max_tokens=experience_max_length, tokenizer=self.tokenizer
+                )
+                has_experience_count += 1
+
+            # Build teacher messages with experience
+            if raw_prompt is not None and isinstance(raw_prompt, (list, tuple)):
+                teacher_messages = build_experience_prompt(
+                    raw_prompt, experience,
+                    mode="system_prompt" if train_system_prompt else "user_content",
+                    train_system_prompt=train_system_prompt,
+                )
+            else:
+                teacher_messages = [{"role": "user", "content": prompt_text}]
+                if experience:
+                    teacher_messages = build_experience_prompt(
+                        teacher_messages, experience,
+                        mode="system_prompt" if train_system_prompt else "user_content",
+                        train_system_prompt=train_system_prompt,
+                    )
+
+            exp_prompts.append(teacher_messages)
+
+        # Tokenize teacher prompts and compute ref model log-probs
+        # For now, we pass the experience info as metadata; the actual ref log-prob
+        # computation happens via the existing ref_policy_wg.compute_ref_log_prob path
+        # We need to rebuild input_ids with experience-augmented prompts
+
+        response_mask = batch.batch["response_mask"]
+        responses = batch.batch["responses"]
+
+        teacher_input_ids_list = []
+        teacher_attention_mask_list = []
+        teacher_position_ids_list = []
+
+        max_prompt_len = getattr(self.config.data, "max_prompt_length", 17408)
+
+        for i in range(batch_size):
+            # Tokenize teacher prompt
+            apply_kwargs = {}
+            if hasattr(self.config.data, "apply_chat_template_kwargs"):
+                apply_kwargs = dict(self.config.data.get("apply_chat_template_kwargs", {}) or {})
+
+            processing_class = getattr(self, "processor", None) or self.tokenizer
+            raw_prompt_text = processing_class.apply_chat_template(
+                exp_prompts[i],
+                tokenize=False,
+                add_generation_prompt=True,
+                **apply_kwargs,
+            )
+
+            teacher_prompt_output = self.tokenizer(
+                raw_prompt_text,
+                return_tensors="pt",
+                add_special_tokens=False,
+                truncation=True,
+                max_length=max_prompt_len,
+            )
+            prompt_ids = teacher_prompt_output["input_ids"].squeeze(0)
+            prompt_mask = teacher_prompt_output["attention_mask"].squeeze(0)
+
+            # Concat with student response
+            valid_response_len = int(response_mask[i].sum().item())
+            response_ids = responses[i, :valid_response_len]
+            teacher_ids = torch.cat([prompt_ids, response_ids], dim=0)
+            teacher_mask = torch.cat([prompt_mask, torch.ones(valid_response_len, dtype=torch.long)], dim=0)
+            teacher_pos = torch.arange(len(teacher_ids), dtype=torch.long)
+
+            teacher_input_ids_list.append(teacher_ids)
+            teacher_attention_mask_list.append(teacher_mask)
+            teacher_position_ids_list.append(teacher_pos)
+
+        # Pad to same length
+        import torch
+        pad_token_id = self.tokenizer.pad_token_id or 0
+        teacher_input_ids = torch.nn.utils.rnn.pad_sequence(
+            teacher_input_ids_list, batch_first=True, padding_value=pad_token_id,
+        ).to(device)
+        teacher_attention_mask = torch.nn.utils.rnn.pad_sequence(
+            teacher_attention_mask_list, batch_first=True, padding_value=0,
+        ).to(device)
+        teacher_position_ids = torch.nn.utils.rnn.pad_sequence(
+            teacher_position_ids_list, batch_first=True, padding_value=0,
+        ).to(device)
+
+        # Compute ref model log-probs on experience-augmented inputs
+        # We create a temporary batch for the ref model
+        exp_batch = DataProto.from_dict(tensors={
+            "input_ids": teacher_input_ids,
+            "attention_mask": teacher_attention_mask,
+            "position_ids": teacher_position_ids,
+            "responses": batch.batch["responses"],
+            "response_mask": batch.batch["response_mask"],
+        })
+
+        # Use ref policy to compute log probs
+        assert self.use_reference_policy, "OPCD requires reference policy for experience log-prob computation"
+        exp_log_prob_output = self.ref_policy_wg.compute_ref_log_prob(exp_batch)
+
+        exp_log_probs = exp_log_prob_output.batch["ref_log_prob"]
+
+        metrics = {
+            "opcd/experience_coverage": has_experience_count / max(batch_size, 1),
+            "opcd/exp_log_prob_mean": exp_log_probs.mean().detach().item(),
+        }
+
+        return DataProto.from_dict(tensors={
+            "exp_log_probs": exp_log_probs,
+        }), metrics
+    # ============ [EasyOPD] End ============
+
+    # ============ [EasyOPD] Build self-distillation batch (Vision-OPD) ============
+    def _maybe_build_vision_opd_batch(
+        self,
+        batch,
+        reward_tensor,
+    ):
+        """Build teacher inputs for Vision-OPD self-distillation.
+
+        Constructs teacher_input_ids, teacher_attention_mask, teacher_position_ids,
+        teacher_response_start_idx, and self_distillation_mask based on the
+        self_distillation configuration.
+
+        Supports two modes:
+        1. teacher_always_on + teacher_image_key: Swap student images with teacher bbox images
+        2. teacher_always_on + teacher_prompt_mode="answer_hint": Add ground truth as hint
+
+        Returns:
+            Optional tuple of (DataProto with teacher tensors, metrics dict), or None if not applicable.
+        """
+        from verl import DataProto
+        from easyopd.methods.vision_opd.teacher_utils import (
+            prepare_teacher_messages_with_bbox_images,
+            prepare_opsd_teacher_messages,
+            extract_images_from_messages,
+            teacher_images_available,
+        )
+        import numpy as np
+
+        self_distillation_cfg = self.config.actor_rollout_ref.actor.get("self_distillation", None)
+        if self_distillation_cfg is None:
+            return None
+
+        device = batch.batch["input_ids"].device
+        response_mask = batch.batch["response_mask"]
+        responses = batch.batch["responses"]
+        batch_size = batch.batch["input_ids"].shape[0]
+
+        teacher_prompt_mode = self_distillation_cfg.get("teacher_prompt_mode", None)
+        use_opsd_answer_hint = (
+            self_distillation_cfg.get("teacher_always_on", False)
+            and teacher_prompt_mode == "answer_hint"
+        )
+        use_teacher_image_swap = (
+            self_distillation_cfg.get("teacher_always_on", False)
+            and self_distillation_cfg.get("teacher_image_key", None) is not None
+            and not use_opsd_answer_hint
+        )
+
+        if use_opsd_answer_hint:
+            # OPSD mode: add answer hint to teacher prompt
+            answer_hint_template = self_distillation_cfg.get(
+                "answer_hint_template",
+                "\n\nHere is a reference solution to this problem:\n{answer}\n\n"
+                "After understanding the reference solution, please try to solve this problem below:\n",
+            )
+
+            teacher_input_ids_list = []
+            teacher_attention_mask_list = []
+            teacher_position_ids_list = []
+            teacher_response_start_idx_list = []
+            teacher_present_mask_list = []
+
+            for i in range(batch_size):
+                # Get ground truth answer
+                reward_model_info = batch.non_tensor_batch.get("reward_model", [None] * batch_size)
+                answer = None
+                if reward_model_info[i] is not None and isinstance(reward_model_info[i], dict):
+                    answer = reward_model_info[i].get("ground_truth", None)
+                if answer is None:
+                    extra_info = batch.non_tensor_batch.get("extra_info", [None] * batch_size)
+                    if extra_info[i] is not None and isinstance(extra_info[i], dict):
+                        answer = extra_info[i].get("answer", None)
+
+                has_answer = answer is not None and str(answer).strip() != ""
+                teacher_present_mask_list.append(1.0 if has_answer else 0.0)
+
+                if not has_answer:
+                    answer = ""
+
+                raw_prompt_messages = list(batch.non_tensor_batch["raw_prompt"][i])
+                teacher_messages = prepare_opsd_teacher_messages(
+                    raw_prompt_messages, str(answer), answer_hint_template
+                )
+
+                # Tokenize teacher messages
+                apply_kwargs = dict(self.config.data.get("apply_chat_template_kwargs", {}) or {})
+                processing_class = getattr(self, "processor", None) or self.tokenizer
+                raw_prompt = processing_class.apply_chat_template(
+                    teacher_messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    **apply_kwargs,
+                )
+                max_prompt_len = self_distillation_cfg.get("max_reprompt_len", 10240)
+                teacher_prompt_output = self.tokenizer(
+                    raw_prompt,
+                    return_tensors="pt",
+                    add_special_tokens=False,
+                    truncation=True,
+                    max_length=max_prompt_len,
+                )
+                prompt_ids = teacher_prompt_output["input_ids"].squeeze(0)
+                prompt_mask = teacher_prompt_output["attention_mask"].squeeze(0)
+
+                # Concat with response
+                valid_response_len = int(response_mask[i].sum().item())
+                response_ids = responses[i, :valid_response_len]
+                teacher_ids = torch.cat([prompt_ids, response_ids], dim=0)
+                teacher_mask = torch.cat([prompt_mask, torch.ones(valid_response_len, dtype=torch.long)], dim=0)
+                teacher_pos = torch.arange(len(teacher_ids), dtype=torch.long)
+                teacher_resp_start = torch.tensor([len(prompt_ids)], dtype=torch.long)
+
+                teacher_input_ids_list.append(teacher_ids)
+                teacher_attention_mask_list.append(teacher_mask)
+                teacher_position_ids_list.append(teacher_pos)
+                teacher_response_start_idx_list.append(teacher_resp_start)
+
+            # Pad to same length
+            teacher_input_ids = torch.nn.utils.rnn.pad_sequence(
+                teacher_input_ids_list, batch_first=True,
+                padding_value=self.tokenizer.pad_token_id or 0,
+            ).to(device)
+            teacher_attention_mask = torch.nn.utils.rnn.pad_sequence(
+                teacher_attention_mask_list, batch_first=True, padding_value=0,
+            ).to(device)
+            teacher_position_ids = torch.nn.utils.rnn.pad_sequence(
+                teacher_position_ids_list, batch_first=True, padding_value=0,
+            ).to(device)
+
+            teacher_present_mask = torch.tensor(teacher_present_mask_list, dtype=torch.float32, device=device)
+            metrics = {
+                "self_distillation/teacher_always_on_fraction": teacher_present_mask.mean().item(),
+                "self_distillation/opsd_answer_hint_fraction": teacher_present_mask.mean().item(),
+                "self_distillation/policy_fallback_fraction": (1.0 - teacher_present_mask.mean()).item(),
+            }
+            return DataProto.from_dict(
+                tensors={
+                    "teacher_input_ids": teacher_input_ids,
+                    "teacher_attention_mask": teacher_attention_mask,
+                    "teacher_position_ids": teacher_position_ids,
+                    "teacher_response_start_idx": torch.stack(teacher_response_start_idx_list).to(device),
+                    "self_distillation_mask": teacher_present_mask,
+                },
+            ), metrics
+
+        elif use_teacher_image_swap:
+            # Teacher image swap mode: use bbox_images for teacher
+            teacher_image_key = self_distillation_cfg.get("teacher_image_key", "bbox_images")
+            if teacher_image_key not in batch.non_tensor_batch:
+                print(f"[EasyOPD] Warning: teacher_image_key '{teacher_image_key}' not found in batch")
+                return None
+
+            fallback_to_policy_loss = self_distillation_cfg.get("fallback_to_policy_loss_on_missing_teacher", False)
+
+            teacher_input_ids_list = []
+            teacher_attention_mask_list = []
+            teacher_position_ids_list = []
+            teacher_response_start_idx_list = []
+            teacher_multi_modal_inputs_list = []
+            teacher_present_mask_list = []
+
+            for i in range(batch_size):
+                teacher_images = batch.non_tensor_batch[teacher_image_key][i]
+                if isinstance(teacher_images, np.ndarray):
+                    teacher_images = teacher_images.tolist()
+                elif teacher_images is None:
+                    teacher_images = []
+                else:
+                    teacher_images = list(teacher_images) if not isinstance(teacher_images, list) else teacher_images
+
+                has_teacher_images = teacher_images_available(teacher_images)
+                teacher_present_mask_list.append(1.0 if has_teacher_images else 0.0)
+
+                if not has_teacher_images:
+                    if not fallback_to_policy_loss:
+                        # Use student images as fallback
+                        teacher_images = extract_images_from_messages(
+                            list(batch.non_tensor_batch["raw_prompt"][i])
+                        )
+
+                raw_prompt_messages = list(batch.non_tensor_batch["raw_prompt"][i])
+                teacher_messages = prepare_teacher_messages_with_bbox_images(
+                    raw_prompt_messages, teacher_images
+                )
+
+                # Tokenize teacher messages
+                apply_kwargs = dict(self.config.data.get("apply_chat_template_kwargs", {}) or {})
+                processing_class = getattr(self, "processor", None) or self.tokenizer
+                raw_prompt = processing_class.apply_chat_template(
+                    teacher_messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    **apply_kwargs,
+                )
+                max_prompt_len = self_distillation_cfg.get("max_reprompt_len", 10240)
+
+                # Handle multimodal processing
+                teacher_multi_modal_inputs = None
+                if hasattr(self, "processor") and self.processor is not None:
+                    prompt_images = extract_images_from_messages(teacher_messages)
+                    model_inputs = dict(
+                        self.processor(
+                            text=[raw_prompt],
+                            images=prompt_images or None,
+                            videos=None,
+                            return_tensors="pt",
+                            truncation=True,
+                            max_length=max_prompt_len,
+                        )
+                    )
+                    teacher_multi_modal_inputs = model_inputs.copy()
+                    prompt_ids = teacher_multi_modal_inputs.pop("input_ids").squeeze(0)
+                    prompt_mask = teacher_multi_modal_inputs.pop("attention_mask").squeeze(0)
+                else:
+                    teacher_prompt_output = self.tokenizer(
+                        raw_prompt,
+                        return_tensors="pt",
+                        add_special_tokens=False,
+                        truncation=True,
+                        max_length=max_prompt_len,
+                    )
+                    prompt_ids = teacher_prompt_output["input_ids"].squeeze(0)
+                    prompt_mask = teacher_prompt_output["attention_mask"].squeeze(0)
+
+                # Concat with response
+                valid_response_len = int(response_mask[i].sum().item())
+                response_ids = responses[i, :valid_response_len]
+                teacher_ids = torch.cat([prompt_ids, response_ids], dim=0)
+                teacher_mask = torch.cat([prompt_mask, torch.ones(valid_response_len, dtype=torch.long)], dim=0)
+                teacher_pos = torch.arange(len(teacher_ids), dtype=torch.long)
+                teacher_resp_start = torch.tensor([len(prompt_ids)], dtype=torch.long)
+
+                teacher_input_ids_list.append(teacher_ids)
+                teacher_attention_mask_list.append(teacher_mask)
+                teacher_position_ids_list.append(teacher_pos)
+                teacher_response_start_idx_list.append(teacher_resp_start)
+                teacher_multi_modal_inputs_list.append(teacher_multi_modal_inputs)
+
+            # Pad to same length
+            teacher_input_ids = torch.nn.utils.rnn.pad_sequence(
+                teacher_input_ids_list, batch_first=True,
+                padding_value=self.tokenizer.pad_token_id or 0,
+            ).to(device)
+            teacher_attention_mask = torch.nn.utils.rnn.pad_sequence(
+                teacher_attention_mask_list, batch_first=True, padding_value=0,
+            ).to(device)
+            teacher_position_ids = torch.nn.utils.rnn.pad_sequence(
+                teacher_position_ids_list, batch_first=True, padding_value=0,
+            ).to(device)
+
+            teacher_present_mask = torch.tensor(teacher_present_mask_list, dtype=torch.float32, device=device)
+            metrics = {
+                "self_distillation/teacher_always_on_fraction": teacher_present_mask.mean().item(),
+                "self_distillation/teacher_image_swap_fraction": teacher_present_mask.mean().item(),
+                "self_distillation/policy_fallback_fraction": (1.0 - teacher_present_mask.mean()).item(),
+            }
+
+            tensors = {
+                "teacher_input_ids": teacher_input_ids,
+                "teacher_attention_mask": teacher_attention_mask,
+                "teacher_position_ids": teacher_position_ids,
+                "teacher_response_start_idx": torch.stack(teacher_response_start_idx_list).to(device),
+                "self_distillation_mask": teacher_present_mask,
+            }
+            non_tensors = {}
+            if any(m is not None for m in teacher_multi_modal_inputs_list):
+                non_tensors["teacher_multi_modal_inputs"] = teacher_multi_modal_inputs_list
+
+            return DataProto.from_dict(tensors=tensors, non_tensors=non_tensors), metrics
+
+        return None
+    # ============ [EasyOPD] End ============
+
+    # ============ [EasyOPD:OPSA] Build self-distillation batch with privileged contexts ============
+    def _maybe_build_opsa_batch(self, batch):
+        """Build teacher inputs with privileged contexts for OPSA self-distillation.
+
+        For OPSA, the teacher is a frozen copy of the student model, but provided
+        with type-conditional privileged contexts (paper Section 3.2):
+        - Harmful queries  → safety-focused system prompt  (I_h)
+        - Benign queries   → helpfulness-focused system prompt (I_b)
+
+        Each prompt in the batch is re-tokenized with its corresponding privileged
+        system prompt prepended, then passed through the frozen ref model to obtain
+        per-token teacher log-probs used as the dense KL supervision target.
+
+        Returns:
+            Tuple of (DataProto with opsa_teacher_log_probs, metrics) or (None, {}).
+        """
+        if not self.opsa_enable:
+            return None, {}
+
+        try:
+            import torch
+
+            device = batch.batch["input_ids"].device
+            batch_size = batch.batch["input_ids"].shape[0]
+            responses = batch.batch["responses"]        # (B, max_resp_len)
+            response_mask = batch.batch["response_mask"]  # (B, max_resp_len)
+            # batch["prompts"] holds only the prompt token ids (without response).
+            # Use it instead of input_ids to avoid leaking the on-policy response
+            # into the teacher's user message (Bug 7 fix).
+            if "prompts" in batch.batch:
+                prompt_ids_batch = batch.batch["prompts"]
+            elif "input_ids" in batch.batch:
+                prompt_ids_batch = batch.batch["input_ids"]
+            else:
+                print("[EasyOPD:OPSA] Warning: Neither 'prompts' nor 'input_ids' found in batch.")
+                return None, {}
+            max_prompt_len = getattr(self.config.data, "max_prompt_length", 1024)
+            pad_token_id = self.tokenizer.pad_token_id or 0
+
+            # safety_label column: "harmful" | "benign" | missing → default to harmful context
+            safety_labels = batch.non_tensor_batch.get("safety_label", None)
+
+            apply_kwargs = {}
+            if hasattr(self.config.data, "apply_chat_template_kwargs"):
+                apply_kwargs = dict(self.config.data.get("apply_chat_template_kwargs", {}) or {})
+
+            teacher_input_ids_list = []
+            teacher_attention_mask_list = []
+            teacher_position_ids_list = []
+            # Per-sample valid response lengths; used later to build aligned responses tensor.
+            valid_resp_lens = []
+
+            for i in range(batch_size):
+                # Choose privileged context based on query type
+                if safety_labels is not None:
+                    label = safety_labels[i] if isinstance(safety_labels[i], str) else str(safety_labels[i])
+                    privileged_ctx = (
+                        self.opsa_benign_context if label.lower() == "benign"
+                        else self.opsa_harmful_context
+                    )
+                else:
+                    privileged_ctx = self.opsa_harmful_context
+
+                # Decode only the prompt part (no response tokens).
+                # batch["prompts"] has shape (B, prompt_len); batch["input_ids"] has shape
+                # (B, prompt_len + resp_len).  In either case we use the attention_mask
+                # sliced to exactly prompt_ids_batch[i]'s own length to strip left-padding.
+                prompt_seq_len = prompt_ids_batch[i].shape[-1]
+                # attention_mask covers the full input_ids sequence; take only the
+                # first prompt_seq_len positions which correspond to the prompt.
+                attn = batch.batch["attention_mask"][i, :prompt_seq_len]
+                # Find the first valid (non-padding) token position for robust decoding.
+                valid_indices = (attn == 1).nonzero(as_tuple=True)[0]
+                if len(valid_indices) > 0:
+                    first_valid_idx = valid_indices[0]
+                    raw_prompt_text = self.tokenizer.decode(
+                        prompt_ids_batch[i][first_valid_idx:], skip_special_tokens=True
+                    )
+                else:
+                    raw_prompt_text = ""
+
+                teacher_messages = [
+                    {"role": "system", "content": privileged_ctx},
+                    {"role": "user", "content": raw_prompt_text},
+                ]
+
+                teacher_prompt_text = self.tokenizer.apply_chat_template(
+                    teacher_messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    **apply_kwargs,
+                )
+
+                teacher_prompt_out = self.tokenizer(
+                    teacher_prompt_text,
+                    return_tensors="pt",
+                    add_special_tokens=False,
+                    truncation=True,
+                    max_length=max_prompt_len,
+                )
+                t_prompt_ids = teacher_prompt_out["input_ids"].squeeze(0)
+                t_prompt_mask = teacher_prompt_out["attention_mask"].squeeze(0)
+
+                # Concatenate with the student's valid (non-padded) on-policy response tokens.
+                valid_resp_len = int(response_mask[i].sum().item())
+                valid_resp_lens.append(valid_resp_len)
+                resp_ids = responses[i, :valid_resp_len]
+                full_ids = torch.cat([t_prompt_ids, resp_ids], dim=0)
+                full_mask = torch.cat([t_prompt_mask, torch.ones(valid_resp_len, dtype=torch.long)], dim=0)
+                full_pos = torch.arange(len(full_ids), dtype=torch.long)
+
+                teacher_input_ids_list.append(full_ids)
+                teacher_attention_mask_list.append(full_mask)
+                teacher_position_ids_list.append(full_pos)
+
+            # Pad to uniform length within this batch
+            teacher_input_ids = torch.nn.utils.rnn.pad_sequence(
+                teacher_input_ids_list, batch_first=True, padding_value=pad_token_id,
+            ).to(device)
+            teacher_attention_mask = torch.nn.utils.rnn.pad_sequence(
+                teacher_attention_mask_list, batch_first=True, padding_value=0,
+            ).to(device)
+            teacher_position_ids = torch.nn.utils.rnn.pad_sequence(
+                teacher_position_ids_list, batch_first=True, padding_value=0,
+            ).to(device)
+
+            # Build per-sample response tensors aligned to the teacher sequence.
+            # _forward_micro_batch uses `responses.size(-1)` as response_length to slice
+            # the last N positions off the teacher sequence.  We must pass a `responses`
+            # whose length equals the number of valid response tokens in the teacher
+            # input_ids so that the slice correctly covers the response region.
+            # Since different samples have different valid_resp_lens, we pad to the
+            # maximum and build a matching response_mask (Bug 1 fix).
+            max_valid_resp = max(valid_resp_lens)
+            teacher_responses = torch.zeros(batch_size, max_valid_resp, dtype=responses.dtype, device=device)
+            teacher_response_mask = torch.zeros(batch_size, max_valid_resp, dtype=response_mask.dtype, device=device)
+            for i, vlen in enumerate(valid_resp_lens):
+                teacher_responses[i, :vlen] = responses[i, :vlen]
+                teacher_response_mask[i, :vlen] = 1
+
+            # Pass through frozen ref model (teacher) to get per-token log-probs
+            teacher_batch = DataProto.from_dict(tensors={
+                "input_ids": teacher_input_ids,
+                "attention_mask": teacher_attention_mask,
+                "position_ids": teacher_position_ids,
+                "responses": teacher_responses,
+                "response_mask": teacher_response_mask,
+            })
+
+            # ============ [EasyOPD:OPSA] request top-K teacher logits when configured ============
+            opsa_topk_k = None
+            try:
+                actor_cfg = self.config.actor_rollout_ref.actor
+                opsa_topk_k_cfg = actor_cfg.get("opsa_topk_logits_k", 0)
+                if opsa_topk_k_cfg is not None and int(opsa_topk_k_cfg) > 0:
+                    opsa_topk_k = int(opsa_topk_k_cfg)
+                    teacher_batch.meta_info["opsa_topk_k"] = opsa_topk_k
+            except Exception:
+                opsa_topk_k = None
+            # ============ [EasyOPD:OPSA] End ============
+
+            if not self.ref_in_actor:
+                teacher_output = self.ref_policy_wg.compute_ref_log_prob(teacher_batch)
+            else:
+                teacher_output = self.actor_rollout_wg.compute_ref_log_prob(teacher_batch)
+
+            # Shape: (batch_size, max_valid_resp) — per-token log-probs under privileged context.
+            # Pad to (batch_size, max_resp_len) so the tensor aligns with response_mask and
+            # student log_prob when merged into the training batch via batch.union().
+            teacher_log_probs_raw = teacher_output.batch["ref_log_prob"]  # (B, max_valid_resp)
+            max_resp_len = responses.shape[1]
+            if teacher_log_probs_raw.shape[1] < max_resp_len:
+                pad_cols = max_resp_len - teacher_log_probs_raw.shape[1]
+                teacher_log_probs = torch.nn.functional.pad(
+                    teacher_log_probs_raw, (0, pad_cols), value=0.0
+                )
+            elif teacher_log_probs_raw.shape[1] > max_resp_len:
+                teacher_log_probs = teacher_log_probs_raw[:, :max_resp_len]
+            else:
+                teacher_log_probs = teacher_log_probs_raw
+
+            opsa_tensors = {"opsa_teacher_log_probs": teacher_log_probs}
+
+            # ============ [EasyOPD:OPSA] forward top-K teacher distributions to the actor ============
+            if opsa_topk_k is not None and "ref_topk_log_probs" in teacher_output.batch.keys():
+                topk_values_raw = teacher_output.batch["ref_topk_log_probs"]   # (B, max_valid_resp, K)
+                topk_indices_raw = teacher_output.batch["ref_topk_indices"]    # (B, max_valid_resp, K)
+                if topk_values_raw.shape[1] < max_resp_len:
+                    pad_cols = max_resp_len - topk_values_raw.shape[1]
+                    topk_values = torch.nn.functional.pad(topk_values_raw, (0, 0, 0, pad_cols), value=0.0)
+                    topk_indices = torch.nn.functional.pad(topk_indices_raw, (0, 0, 0, pad_cols), value=0)
+                elif topk_values_raw.shape[1] > max_resp_len:
+                    topk_values = topk_values_raw[:, :max_resp_len, :]
+                    topk_indices = topk_indices_raw[:, :max_resp_len, :]
+                else:
+                    topk_values = topk_values_raw
+                    topk_indices = topk_indices_raw
+                opsa_tensors["opsa_teacher_topk_log_probs"] = topk_values
+                opsa_tensors["opsa_teacher_topk_indices"] = topk_indices.to(torch.int64)
+            # ============ [EasyOPD:OPSA] End ============
+
+            metrics = {
+                "opsa/teacher_log_prob_mean": teacher_log_probs.mean().detach().item(),
+                "opsa/teacher_log_prob_std": teacher_log_probs.std().detach().item(),
+            }
+
+            # TFR proxy: on harmful samples, measure how much higher the teacher log-prob is
+            # compared to the student's on-policy log-prob.  A large positive gap means the
+            # privileged context is successfully activating safer (more probable) responses.
+            if safety_labels is not None and "old_log_probs" in batch.batch:
+                import numpy as np
+                student_lp = batch.batch["old_log_probs"]  # (B, resp_len), student on-policy
+                harmful_mask = [
+                    (str(safety_labels[i]).lower() != "benign")
+                    for i in range(batch_size)
+                ]
+                if any(harmful_mask):
+                    harm_idx = [i for i, m in enumerate(harmful_mask) if m]
+                    teacher_lp_harmful = teacher_log_probs[harm_idx].mean().detach().item()
+                    student_lp_harmful = student_lp[harm_idx].mean().detach().item()
+                    tfr_proxy = teacher_lp_harmful - student_lp_harmful
+                    metrics["opsa/tfr_proxy_lp_gap"] = tfr_proxy
+                    # Buffer for periodic TFR logging
+                    self._opsa_tfr_buffer.append(tfr_proxy)
+
+            return DataProto.from_dict(tensors=opsa_tensors), metrics
+
+        except Exception as e:
+            print(f"[EasyOPD:OPSA] Warning: Failed to build OPSA teacher batch: {e}")
+            return None, {}
+    # ============ [EasyOPD:OPSA] End ============
+
     def _apply_filter_groups(self, batch: DataProto) -> DataProto:
         cfg = getattr(self.config.algorithm, "filter_groups", None)
         if cfg is None or not getattr(cfg, "enable", False):
@@ -721,41 +1495,78 @@ class RayPPOTrainer:
 
         response_mask = batch.batch["response_mask"]
 
-        # ============ [EasyOPD:SOD] Step-wise OPD weighting ============
+        # ============ [EasyOPD] Hook-based SOD dispatch ============
         stepwise_enable = getattr(cfg, "stepwise_enable", False)
         if stepwise_enable:
-            from easyopd.methods.sod.core import compute_stepwise_opd_weights
+            # Route to SOD method via hook dispatch if available
+            if self.hook_dispatcher is not None and self.hook_dispatcher.enabled:
+                from easyopd.methods.sod.core import compute_stepwise_opd_weights
 
-            raw_local_adv = (batch.batch["ref_log_prob"] - batch.batch["old_log_probs"]) * response_mask
-            epsilon = float(getattr(cfg, "stepwise_epsilon", 1e-6))
-            delta = float(getattr(cfg, "stepwise_delta", 0.5))
-            opd_coef = float(getattr(cfg, "stepwise_opd_coef", 1.0))
+                raw_local_adv = (batch.batch["ref_log_prob"] - batch.batch["old_log_probs"]) * response_mask
+                epsilon = float(getattr(cfg, "stepwise_epsilon", 1e-6))
+                delta = float(getattr(cfg, "stepwise_delta", 0.5))
+                opd_coef = float(getattr(cfg, "stepwise_opd_coef", 1.0))
 
-            stepwise_weights, stepwise_log_info = compute_stepwise_opd_weights(
-                old_log_probs=batch.batch["old_log_probs"],
-                ref_log_prob=batch.batch["ref_log_prob"],
-                response_mask=response_mask,
-                epsilon=epsilon,
-                delta=delta,
-            )
-            stepwise_weights = stepwise_weights.to(raw_local_adv.device)
+                stepwise_weights, stepwise_log_info = compute_stepwise_opd_weights(
+                    old_log_probs=batch.batch["old_log_probs"],
+                    ref_log_prob=batch.batch["ref_log_prob"],
+                    response_mask=response_mask,
+                    epsilon=epsilon,
+                    delta=delta,
+                )
+                stepwise_weights = stepwise_weights.to(raw_local_adv.device)
 
-            # Weighted OPD signal: w_k * (ref_log_prob - old_log_probs) per token
-            weighted_opd = opd_coef * stepwise_weights * raw_local_adv
+                weighted_opd = opd_coef * stepwise_weights * raw_local_adv
 
-            # Total advantage: A_GRPO (broadcast to token dim) + weighted OPD
-            grpo_adv = batch.batch["advantages"]
-            if grpo_adv.dim() == 1:
-                A_total_token = grpo_adv.unsqueeze(1) + weighted_opd
+                grpo_adv = batch.batch["advantages"]
+                if grpo_adv.dim() == 1:
+                    A_total_token = grpo_adv.unsqueeze(1) + weighted_opd
+                else:
+                    A_total_token = grpo_adv + weighted_opd
+
+                batch.batch["advantages"] = A_total_token
+                batch.meta_info.setdefault("token_kl_reg", {})
+                batch.meta_info["token_kl_reg"].update(
+                    {"stepwise_weights": stepwise_weights.detach().clone(), "local_adv": raw_local_adv.detach().clone()}
+                )
+
+                # Collect diagnostics via MetricsCollector
+                if self.easyopd_metrics is not None:
+                    self.easyopd_metrics.collect({
+                        "mean_step_weight": stepwise_weights[response_mask.bool()].mean().item() if response_mask.any() else 0.0,
+                    })
             else:
-                A_total_token = grpo_adv + weighted_opd
+                # Fallback: direct import (legacy path)
+                from easyopd.methods.sod.core import compute_stepwise_opd_weights
 
-            batch.batch["advantages"] = A_total_token
-            batch.meta_info.setdefault("token_kl_reg", {})
-            batch.meta_info["token_kl_reg"].update(
-                {"stepwise_weights": stepwise_weights.detach().clone(), "local_adv": raw_local_adv.detach().clone()}
-            )
-        # ============ [EasyOPD:SOD] End ============
+                raw_local_adv = (batch.batch["ref_log_prob"] - batch.batch["old_log_probs"]) * response_mask
+                epsilon = float(getattr(cfg, "stepwise_epsilon", 1e-6))
+                delta = float(getattr(cfg, "stepwise_delta", 0.5))
+                opd_coef = float(getattr(cfg, "stepwise_opd_coef", 1.0))
+
+                stepwise_weights, stepwise_log_info = compute_stepwise_opd_weights(
+                    old_log_probs=batch.batch["old_log_probs"],
+                    ref_log_prob=batch.batch["ref_log_prob"],
+                    response_mask=response_mask,
+                    epsilon=epsilon,
+                    delta=delta,
+                )
+                stepwise_weights = stepwise_weights.to(raw_local_adv.device)
+
+                weighted_opd = opd_coef * stepwise_weights * raw_local_adv
+
+                grpo_adv = batch.batch["advantages"]
+                if grpo_adv.dim() == 1:
+                    A_total_token = grpo_adv.unsqueeze(1) + weighted_opd
+                else:
+                    A_total_token = grpo_adv + weighted_opd
+
+                batch.batch["advantages"] = A_total_token
+                batch.meta_info.setdefault("token_kl_reg", {})
+                batch.meta_info["token_kl_reg"].update(
+                    {"stepwise_weights": stepwise_weights.detach().clone(), "local_adv": raw_local_adv.detach().clone()}
+                )
+        # ============ [EasyOPD] End ============
         else:
             # Legacy mode: sigmoid-gated beta blending
             raw_local_adv = (batch.batch["ref_log_prob"] - batch.batch["old_log_probs"]) * response_mask
@@ -1238,6 +2049,9 @@ class RayPPOTrainer:
         to construct the PPO dataflow.
         The light-weight advantage computation is done on the driver process.
         """
+        import numpy as np
+        import uuid
+
         from omegaconf import OmegaConf
 
         from verl.utils.tracking import Tracking
@@ -1396,11 +2210,74 @@ class RayPPOTrainer:
                     if self.use_reference_policy:
                         # compute reference log_prob
                         with marked_timer("ref", timing_raw, color="olive"):
+                            # ============ [EasyOPD] Context distillation before ref log prob ============
+                            if self.use_context_distillation:
+                                from easyopd.methods.g_opd.ref_input_utils import prepare_critique_distillation_inputs
+
+                                apply_chat_template_kwargs = self.config.data.get(
+                                    "apply_chat_template_kwargs", {}
+                                )
+                                batch = prepare_critique_distillation_inputs(
+                                    batch=batch,
+                                    tokenizer=self.tokenizer,
+                                    critique_vllm_url=self.critique_vllm_url,
+                                    critique_model=self.critique_model,
+                                    critique_prompt_template=None,
+                                    ref_apply_chat_template_kwargs=apply_chat_template_kwargs,
+                                    max_critique_tokens=self.max_critique_tokens,
+                                    critique_temperature=self.critique_temperature,
+                                    critique_top_p=self.critique_top_p,
+                                )
+                            elif self.use_ref_solution_distillation:
+                                from easyopd.methods.g_opd.ref_input_utils import prepare_ref_model_inputs_based_on_correct_solution
+
+                                apply_chat_template_kwargs = self.config.data.get(
+                                    "apply_chat_template_kwargs", {}
+                                )
+                                batch = prepare_ref_model_inputs_based_on_correct_solution(
+                                    batch=batch,
+                                    tokenizer=self.tokenizer,
+                                    apply_chat_template_kwargs=apply_chat_template_kwargs,
+                                )
+                            # ============ [EasyOPD] End ============
+
                             if not self.ref_in_actor:
                                 ref_log_prob = self.ref_policy_wg.compute_ref_log_prob(batch)
                             else:
                                 ref_log_prob = self.actor_rollout_wg.compute_ref_log_prob(batch)
                             batch = batch.union(ref_log_prob)
+
+                    # ============ [EasyOPD] Compute base model log probs for corrected reward ============
+                    if self.use_base_models:
+                        with marked_timer("base_log_probs", timing_raw, color="green"):
+                            # Compute base_ref_log_prob using ref's base model
+                            if not self.ref_in_actor:
+                                base_ref_log_prob = self.ref_policy_wg.compute_base_ref_log_prob(batch)
+                            else:
+                                base_ref_log_prob = self.actor_rollout_wg.compute_base_ref_log_prob(batch)
+                            batch = batch.union(base_ref_log_prob)
+
+                            # Compute base_log_prob using actor's base model with input_ids
+                            # Temporarily remove ref_input_ids to ensure compute uses input_ids
+                            ref_input_tensors = {}
+                            if "ref_input_ids" in batch.batch:
+                                ref_input_tensors["ref_input_ids"] = batch.batch.pop("ref_input_ids")
+                            if "ref_attention_mask" in batch.batch:
+                                ref_input_tensors["ref_attention_mask"] = batch.batch.pop("ref_attention_mask")
+                            if "ref_position_ids" in batch.batch:
+                                ref_input_tensors["ref_position_ids"] = batch.batch.pop("ref_position_ids")
+
+                            base_log_prob = self.actor_rollout_wg.compute_base_log_prob(batch)
+                            batch = batch.union(base_log_prob)
+
+                            # Restore ref_input_ids tensors
+                            for key, tensor in ref_input_tensors.items():
+                                batch.batch[key] = tensor
+
+                            print(f"[EasyOPD] Computed base log probs: "
+                                  f"base_log_prob shape={batch.batch['base_log_prob'].shape}, "
+                                  f"base_ref_log_prob shape={batch.batch['base_ref_log_prob'].shape}")
+                    # ============ [EasyOPD] End ============
 
                     # compute values
                     if self.use_critic:
@@ -1461,6 +2338,56 @@ class RayPPOTrainer:
 
                     # implement critic warmup
                     if self.config.trainer.critic_warmup <= self.global_steps:
+                        # ============ [EasyOPD] Build self-distillation batch ============
+                        vopd_loss_mode = self.config.actor_rollout_ref.actor.policy_loss.get("loss_mode", "vanilla")
+                        if vopd_loss_mode == "vopd":
+                            vopd_result = self._maybe_build_vision_opd_batch(batch, reward_tensor)
+                            if vopd_result is not None:
+                                vopd_batch_data, vopd_metrics = vopd_result
+                                batch = batch.union(vopd_batch_data)
+                                metrics.update(vopd_metrics)
+                        # ============ [EasyOPD] End ============
+
+                        # ============ [EasyOPD] Context distillation - experience injection (OPCD) ============
+                        opcd_stage = getattr(self.config.trainer, "stage", None)
+                        if opcd_stage == "consolidate":
+                            opcd_result = self._maybe_build_opcd_batch(batch)
+                            if opcd_result is not None:
+                                opcd_batch_data, opcd_metrics = opcd_result
+                                batch = batch.union(opcd_batch_data)
+                                metrics.update(opcd_metrics)
+                                batch.meta_info["stage_merge"] = True
+                                batch.meta_info["on_policy_merge"] = getattr(
+                                    self.config.trainer, "on_policy_merge", True
+                                )
+                        # ============ [EasyOPD] End ============
+
+                        # ============ [EasyOPD:OPSA] Teacher log-prob injection for self-distillation ============
+                        if self.opsa_enable:
+                            opsa_result, opsa_pre_metrics = self._maybe_build_opsa_batch(batch)
+                            if opsa_result is not None:
+                                batch = batch.union(opsa_result)
+                                metrics.update(opsa_pre_metrics)
+                                print(f"[EasyOPD:OPSA] Step {self.global_steps}: teacher log-probs injected, shape={opsa_result.batch['opsa_teacher_log_probs'].shape}")
+                            else:
+                                print(f"[EasyOPD:OPSA] Step {self.global_steps}: WARNING - _maybe_build_opsa_batch returned None! OPSA loss will NOT execute.")
+
+                            # Periodic TFR proxy reporting (paper Section 3.3)
+                            if (
+                                self._opsa_tfr_buffer
+                                and self.global_steps % self.opsa_tfr_eval_frequency == 0
+                            ):
+                                import numpy as np
+                                tfr_mean = float(np.mean(self._opsa_tfr_buffer))
+                                metrics["opsa/tfr_proxy_lp_gap_avg"] = tfr_mean
+                                if tfr_mean < 0:
+                                    print(
+                                        f"[EasyOPD:OPSA] Step {self.global_steps}: TFR proxy gap={tfr_mean:.4f} "
+                                        f"(negative: privileged context may not be effective enough)"
+                                    )
+                                self._opsa_tfr_buffer.clear()
+                        # ============ [EasyOPD:OPSA] End ============
+
                         # update actor
                         with marked_timer("update_actor", timing_raw, color="red"):
                             batch.meta_info["multi_turn"] = self.config.actor_rollout_ref.rollout.multi_turn.enable

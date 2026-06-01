@@ -17,7 +17,7 @@ from typing import Any, Optional
 
 from verl.base_config import BaseConfig
 
-__all__ = ["AlgoConfig", "FilterGroupsConfig", "KLControlConfig", "TokenKLRegConfig"]
+__all__ = ["AlgoConfig", "FilterGroupsConfig", "KLControlConfig", "TokenKLRegConfig", "RolloutCorrectionConfig"]
 
 
 @dataclass
@@ -67,7 +67,7 @@ class TokenKLRegConfig(BaseConfig):
     gamma: float = 1.0
     beta_min: float = 0.0
     beta_max: Optional[float] = None
-    # [EasyOPD:SOD] Step-wise OPD parameters
+    # [EasyOPD] Step-wise OPD parameters (consumed by SOD method via hook dispatch)
     stepwise_enable: bool = False
     stepwise_epsilon: float = 1e-6
     stepwise_delta: float = 0.5
@@ -104,3 +104,44 @@ class AlgoConfig(BaseConfig):
     pf_ppo: dict[str, Any] = field(default_factory=dict)
     filter_groups: FilterGroupsConfig = field(default_factory=FilterGroupsConfig)
     token_kl_reg: TokenKLRegConfig = field(default_factory=TokenKLRegConfig)
+    # ============ [EasyOPD] Context distillation and ref solution distillation ============
+    critique_vllm_url: Optional[str] = None
+    critique_model: Optional[str] = None
+    max_critique_tokens: int = 2048
+    critique_temperature: float = 0.0
+    critique_top_p: float = 1.0
+    use_ref_solution_distillation: bool = False
+    # ============ [EasyOPD] End ============
+    # ============ [EasyOPD] Rollout correction configuration ============
+    rollout_correction: Optional["RolloutCorrectionConfig"] = None
+    # ============ [EasyOPD] End ============
+    # ============ [EasyOPD] Generic method config (consumed by HookDispatcher) ============
+    easyopd: Optional[dict[str, Any]] = None
+    # ============ [EasyOPD] End ============
+
+
+# ============ [EasyOPD] Rollout correction config ============
+@dataclass
+class RolloutCorrectionConfig(BaseConfig):
+    """Configuration for Rollout Correction (addresses off-policy issues in RL training).
+
+    Rollout Correction handles off-policiness from multiple sources:
+    1. Policy mismatch: Rollout policy (e.g., vLLM BF16) vs Training policy (e.g., FSDP FP32)
+    2. Model update staleness: Rollout data collected from older policy checkpoints
+
+    Args:
+        rollout_is (Optional[str]): IS weight aggregation level.
+            - None: No IS weights
+            - "token": Per-token IS weights (low variance, biased)
+            - "sequence": Per-sequence IS weights (unbiased, high variance)
+        rollout_is_threshold (float): Upper threshold for IS weight truncation.
+        rollout_rs (Optional[str]): Rejection sampling mode.
+        rollout_rs_threshold (Optional[str | float]): Threshold for rejection sampling.
+    """
+
+    rollout_is: Optional[str] = "sequence"
+    rollout_is_threshold: float = 2.0
+    rollout_is_batch_normalize: bool = False
+    rollout_rs: Optional[str] = None
+    rollout_rs_threshold: Optional[Any] = None
+# ============ [EasyOPD] End ============
