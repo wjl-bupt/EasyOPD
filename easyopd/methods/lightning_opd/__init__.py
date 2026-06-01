@@ -29,7 +29,10 @@ Public surface:
 
 from dataclasses import dataclass
 
+from easyopd.registry import register_method
 
+
+@register_method("lightning_opd")
 @dataclass(frozen=True)
 class LightningOPDMethod:
     """Static metadata describing the EasyOPD ``lightning_opd`` method."""
@@ -42,6 +45,16 @@ class LightningOPDMethod:
         "Offline on-policy distillation with precomputed teacher log-probabilities. "
         "Eliminates live teacher dependency during training, reducing cost 3.6-4.0x."
     )
+    paper_url: str = "https://arxiv.org/abs/2604.13010"
+    code_url: str = "https://github.com/NVIDIA-NeMo/Lightning-OPD"
+    # Integration capabilities surfaced for the EasyOPD framework registry.
+    # Lightning-OPD is unique among the unified methods in that it integrates
+    # via verl's ADV_ESTIMATOR_REGISTRY plus a data adapter that lifts
+    # precomputed teacher log-probabilities from parquet (non-tensor batch)
+    # into a padded tensor before advantage computation. Actor / critic /
+    # reward-manager surfaces are unchanged.
+    capabilities: tuple = ("advantage_estimator", "data_adapter")
+    integration_mode: str = "advantage-estimator"
 
 
 METHOD = LightningOPDMethod()

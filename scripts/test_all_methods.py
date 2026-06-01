@@ -74,15 +74,18 @@ def run_test(name: str, test_fn) -> TestResult:
 # Tests
 # ---------------------------------------------------------------------------
 
-EXPECTED_METHODS = ["g_opd", "gad", "gkd", "opcd", "opsa", "ropd", "sdpo", "simct", "simple", "sod", "vision_opd"]
+EXPECTED_METHODS = ["g_opd", "gad", "gkd", "lightning_opd", "opcd", "opsa", "ropd", "sdpo", "simct", "simple", "sod", "vision_opd"]
 
 # Methods that integrate with verl outside the actor-side HookDispatcher and
 # therefore legitimately have no actor LossHook / RolloutHook / RewardHook /
 # AlignmentHook / TeacherSidecarHook. GAD repurposes the PPO *critic* as a
 # Bradley-Terry discriminator and dispatches via
 # `verl/workers/critic/dp_critic.py`, so the actor side stays on verl's
-# unmodified PPO loss.
-NON_ACTOR_HOOK_METHODS = {"gad"}
+# unmodified PPO loss. Lightning-OPD plugs into verl's ADV_ESTIMATOR_REGISTRY
+# plus a data adapter that lifts precomputed teacher log-probabilities from
+# parquet into a padded tensor; actor / critic / reward-manager surfaces
+# remain on verl's unmodified path.
+NON_ACTOR_HOOK_METHODS = {"gad", "lightning_opd"}
 
 
 def test_auto_discover():
@@ -219,6 +222,10 @@ def test_method_hook_coverage():
         # GAD modifies the PPO critic (Bradley-Terry discriminator) instead
         # of the actor; it deliberately exposes no actor-side hook.
         "gad": set(),
+        # Lightning-OPD integrates via verl's ADV_ESTIMATOR_REGISTRY and a
+        # data adapter for precomputed teacher log-probabilities; it has no
+        # actor-side HookDispatcher hook by design.
+        "lightning_opd": set(),
     }
 
     for method_name, expected in expected_hooks.items():
