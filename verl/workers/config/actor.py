@@ -25,7 +25,81 @@ from .engine import FSDPEngineConfig, McoreEngineConfig
 from .model import HFModelConfig
 from .optimizer import OptimizerConfig
 
-__all__ = ["PolicyLossConfig", "ActorConfig", "FSDPActorConfig", "McoreActorConfig"]
+__all__ = ["SelfDistillationConfig", "PolicyLossConfig", "ActorConfig", "FSDPActorConfig", "McoreActorConfig"]
+
+
+# ============ [EasyOPD] Self-distillation configuration ============
+@dataclass
+class SelfDistillationConfig(BaseConfig):
+    """Configuration for self-distillation loss (Vision-OPD).
+
+    Distillation is enabled when policy_loss.loss_mode is "vopd".
+
+    Args:
+        full_logit_distillation (bool): Whether to use full-logit KL distillation.
+        alpha (float): KL interpolation coefficient. 0.0=forward KL, 1.0=reverse KL, in-between=JSD.
+        gamma (float): Weight applied to the SDPO loss.
+        success_reward_threshold (float): Minimum sequence reward to be considered successful.
+        teacher_regularization (str): Teacher regularization mode. Options: "ema", "trust-region", "progressive".
+        teacher_update_rate (float): EMA update rate for teacher weights.
+        teacher_update_interval (Optional[int]): Hard-sync teacher every N steps (progressive mode).
+        distillation_topk (Optional[int]): If set, use top-k logits for distillation.
+        distillation_add_tail (bool): Whether to add a tail bucket for top-k distillation.
+        max_reprompt_len (int): Maximum length of the reprompted prompt.
+        dont_reprompt_on_self_success (bool): Whether to not reprompt on self-success.
+        is_clip (Optional[float]): Clip value for distillation IS ratio; None disables IS weighting.
+        teacher_always_on (bool): Whether to distill every sample directly from teacher.
+        teacher_model_source (str): Teacher source. Options: "legacy", "current" or "fixed".
+        teacher_model_path (Optional[str]): Fixed teacher model path when teacher_model_source="fixed".
+        teacher_image_key (Optional[str]): Dataset column holding teacher-side images.
+        teacher_prompt_mode (Optional[str]): Teacher prompt mode. Options: None, "answer_hint".
+        fallback_to_policy_loss_on_missing_teacher (bool): Fall back to vanilla policy loss when teacher unavailable.
+        include_environment_feedback (bool): Whether to include environment feedback in reprompting.
+    """
+
+    full_logit_distillation: bool = True
+    alpha: float = 0.0
+    gamma: float = 1.0
+    success_reward_threshold: float = 1.0
+    teacher_regularization: str = "ema"
+    teacher_update_rate: float = 0.05
+    teacher_update_interval: Optional[int] = None
+    distillation_topk: Optional[int] = None
+    distillation_add_tail: bool = True
+    max_reprompt_len: int = 10240
+    reprompt_truncation: str = "right"
+    dont_reprompt_on_self_success: bool = False
+    remove_thinking_from_demonstration: bool = False
+    is_clip: Optional[float] = None
+    reprompt_template: str = (
+        "{prompt}{solution}{feedback}\n\n"
+        "Correctly solve the original question.\n"
+    )
+    solution_template: str = (
+        "\n"
+        "Correct solution:\n\n"
+        "{successful_previous_attempt}\n\n"
+    )
+    feedback_template: str = (
+        "\n"
+        "The following is feedback from your unsuccessful earlier attempt:\n\n"
+        "{feedback_raw}\n\n"
+    )
+    include_environment_feedback: bool = False
+    environment_feedback_only_without_solution: bool = False
+    teacher_always_on: bool = False
+    teacher_model_source: str = "legacy"
+    teacher_model_path: Optional[str] = None
+    teacher_image_key: Optional[str] = None
+    teacher_prompt_mode: Optional[str] = None
+    answer_hint_template: str = (
+        "\n\nHere is a reference solution to this problem:\n"
+        "{answer}\n\n"
+        "After understanding the reference solution, please try to solve this problem using your own approach below:\n"
+    )
+    fallback_to_policy_loss_on_missing_teacher: bool = False
+    log_prob_dump_dir: Optional[str] = None
+# ============ [EasyOPD] End ============
 
 
 @dataclass
@@ -35,12 +109,15 @@ class PolicyLossConfig(BaseConfig):
     The inheritance from BaseConfig provides omegaconf.DictConfig-like interface for a dataclass config.
 
     Args:
-        loss_mode (str): Loss function mode. Options: 'vanilla', 'clip-cov', 'kl-cov', 'gpg'.
+        loss_mode (str): Loss function mode. Options: 'vanilla', 'clip-cov', 'kl-cov', 'gpg', 'vopd'.
         clip_cov_ratio (float): Ratio of tokens to be clipped for clip-cov loss.
         clip_cov_lb (float): Lower bound for clip-cov loss.
         clip_cov_ub (float): Upper bound for clip-cov loss.
         kl_cov_ratio (float): Ratio of tokens to be applied KL penalty for kl-cov loss.
         ppo_kl_coef (float): KL divergence penalty coefficient.
+        only_reverse_kl_advantages (bool): [EasyOPD] Use reverse KL as advantages for OPD.
+        lambda_vals (float): [EasyOPD] Reward scaling factor (1.0=OPD, >1.0=ExOPD).
+        multi_teacher_distill (bool): [EasyOPD] Enable multi-teacher distillation.
     """
 
     loss_mode: str = "vanilla"
@@ -49,6 +126,11 @@ class PolicyLossConfig(BaseConfig):
     clip_cov_ub: float = 5.0
     kl_cov_ratio: float = 0.0002
     ppo_kl_coef: float = 0.1
+    # ============ [EasyOPD] On-policy distillation parameters ============
+    only_reverse_kl_advantages: bool = False
+    lambda_vals: float = 1.0
+    multi_teacher_distill: bool = False
+    # ============ [EasyOPD] End ============
 
 
 @dataclass
@@ -110,6 +192,11 @@ class ActorConfig(BaseConfig):
     use_torch_compile: bool = True
     kl_loss_coef: float = 0.001
     kl_loss_type: str = "low_var_kl"
+    # ============ [EasyOPD] KL distillation config (used by OPCD method) ============
+    kl_topk: int = 0  # If > 0, use top-k logits for full KL computation (memory efficient)
+    kl_renorm_topk: bool = False  # Whether to renormalize top-k log-probs before KL
+    profile_kl: bool = False  # Whether to profile KL computation
+    # ============ [EasyOPD] End ============
     ppo_epochs: int = 1
     shuffle: bool = False
     checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
@@ -120,6 +207,34 @@ class ActorConfig(BaseConfig):
     data_loader_seed = 1
     n: int = 1  # must be override by sampling config
     model_config: HFModelConfig = field(default_factory=BaseConfig)
+    # ============ [EasyOPD] Self-distillation config ============
+    self_distillation: SelfDistillationConfig = field(default_factory=SelfDistillationConfig)
+    # ============ [EasyOPD] End ============
+
+    # ============ [EasyOPD:OPSA] On-Policy Self-Distillation for Safety Alignment ============
+    opsa_enable: bool = False
+    opsa_temperature: float = 1.0
+    opsa_window_size: int = 32
+    opsa_decay_type: str = "linear"  # Options: linear, step, exponential
+    opsa_min_weight: float = 0.1
+    opsa_use_window_weighting: bool = True
+    opsa_distillation_loss_coef: float = 1.0
+    opsa_loss_agg_mode: str = "token-mean"
+    opsa_harmful_context: str = (
+        "You are a helpful and safe AI assistant. When you encounter a harmful, "
+        "dangerous, or unethical request, you MUST refuse clearly and explain why. "
+        "Safety is your highest priority."
+    )
+    opsa_benign_context: str = (
+        "You are a helpful AI assistant. Respond to the user's request directly "
+        "and helpfully. Do not over-refuse safe and reasonable requests."
+    )
+    opsa_kl_type: str = "mixed"  # Options: forward, reverse, mixed
+    opsa_mixed_kl_weight: float = 0.5  # Weight for forward KL in mixed mode
+    opsa_topk_logits_k: int = 512  # Top-K logits for KL computation (0 = per-token only)
+    opsa_tfr_eval_frequency: int = 10
+    opsa_tfr_threshold: float = 0.8
+    # ============ [EasyOPD:OPSA] End ============
 
     def __post_init__(self):
         """Validate actor configuration parameters."""

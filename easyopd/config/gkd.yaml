@@ -1,0 +1,88 @@
+# GKD: Generalized Knowledge Distillation (On-Policy Distillation)
+# Paper: https://arxiv.org/abs/2306.13649 (ICLR 2024)
+#
+# This config defines the GKD-specific parameters for EasyOPD.
+# Use with: bash examples/gkd/run_gkd.sh
+
+method:
+  name: gkd
+  description: "GKD: On-Policy Distillation of Language Models"
+
+model:
+  # Student model (to be trained)
+  student_model_path: "Qwen/Qwen2-0.5B-Instruct"
+  # Teacher model (provides dense feedback)
+  teacher_model_path: "Qwen/Qwen2-1.5B-Instruct"
+
+training:
+  # verl standard training parameters
+  adv_estimator: grpo
+  loss_agg_mode: token-mean
+  actor_lr: 5e-6
+  train_batch_size: 128
+  ppo_mini_batch_size: 128
+  total_epochs: 1
+  total_training_steps: 100
+
+  # GKD-specific parameters
+  gkd:
+    # beta: JSD interpolation parameter (paper Eq. 1 convention)
+    # beta=0.0 -> pure forward KL: KL(student || teacher) (mean-seeking)
+    # beta=0.5 -> symmetric JSD (balanced, recommended)
+    # beta=1.0 -> pure reverse KL: KL(teacher || student) (mode-seeking)
+    beta: 0.5
+
+    # temperature: softmax temperature for KL computation
+    temperature: 1.0
+
+    # Whether to use policy gradient (on-policy) or direct supervised loss
+    # true = on-policy (student generates, teacher scores) -- GKD's key innovation
+    # false = off-policy (direct KL backprop)
+    use_policy_gradient: true
+
+    # Distillation loss coefficient (when combined with task rewards)
+    distillation_loss_coef: 1.0
+
+    # Whether to include task rewards alongside distillation
+    use_task_rewards: true
+
+    # Loss mode for the distillation loss
+    # "gkd" = generalized JSD (full vocabulary)
+    # "gkd_estimator" = generalized JSD with single-sample estimators
+    loss_mode: gkd
+
+distillation:
+  enabled: true
+  n_gpus_per_node: 8
+  nnodes: 1
+  teacher_models:
+    teacher_model:
+      model_path: "Qwen/Qwen2-1.5B-Instruct"
+      inference:
+        name: vllm
+        tensor_model_parallel_size: 2
+        gpu_memory_utilization: 0.5
+
+rollout:
+  max_prompt_length: 1024
+  max_response_length: 512
+  temperature: 1.0
+  n: 1
+  gpu_memory_utilization: 0.8
+
+data:
+  # Option 1 (Recommended): Specify a HuggingFace dataset name.
+  # EasyOPD will automatically download, convert, and cache it.
+  dataset: "openai/gsm8k"
+  dataset_split: "train"
+  val_split: "test"
+  prompt_template: "math_qa"  # auto-converts to chat format
+  # max_samples: 1000  # uncomment to limit dataset size
+
+  # Option 2: Specify local Parquet files directly (overrides Option 1).
+  # train_files: ["/path/to/your/train.parquet"]
+  # val_files: ["/path/to/your/val.parquet"]
+
+  prompt_key: content
+  max_prompt_length: 1024
+  truncation: right

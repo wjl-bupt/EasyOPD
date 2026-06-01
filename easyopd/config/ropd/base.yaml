@@ -1,0 +1,42 @@
+# EasyOPD `ropd` — Rubric-based On-policy Distillation base config template
+#
+# This template only carries the ROPD-specific overrides. Combine it with the
+# standard verl PPO trainer hydra config (see `examples/ropd_trainer/train_ropd.sh`)
+# via Hydra CLI overrides; the shell script is the canonical entry point.
+#
+# Required toggles:
+#   - reward_model.reward_manager=ropd
+#   - reward_model.reward_kwargs.ropd.provider_resolution.spec_path=easyopd/config/ropd/judge_providers.yaml
+#
+# Notes:
+#   * The ROPD reward path runs an external teacher + rubricator + verifier
+#     judge triple to produce per-pair rewards. Provider profiles live in
+#     `easyopd/config/ropd/judge_providers.yaml`; ROPD-specific knobs live in
+#     `easyopd/config/ropd/judge.yaml`.
+#   * Set `DATA_ROOT` and the relevant `ROPD_*` env vars before training; the
+#     shell entrypoint resolves them when assembling the final hydra command.
+
+defaults:
+  - _self_
+
+# ---------- student model & rollout ---------- #
+student_model_path: Qwen/Qwen2.5-7B-Instruct
+student_tokenizer_path: Qwen/Qwen2.5-7B-Instruct
+
+# ---------- training ---------- #
+train_batch_size: 64
+ppo_mini_batch_size: 64
+max_prompt_length: 2048
+max_response_length: 2048
+actor_lr: 1.0e-6
+total_epochs: 3
+
+# ---------- reward manager wiring ---------- #
+reward_model:
+  reward_manager: ropd
+
+# ---------- ROPD-specific overrides ---------- #
+distillation:
+  enabled: true
+  n_gpus_per_node: 4
+  nnodes: 1

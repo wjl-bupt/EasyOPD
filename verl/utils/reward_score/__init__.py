@@ -102,6 +102,10 @@ def default_compute_score(
 
         res = search_r1_like_qa_em.compute_score(solution_str, ground_truth)
 
+    elif data_source == "opsa":
+        # OPSA is pure self-distillation; reward is unused but the pipeline requires a score.
+        res = 0.0
+
     else:
         raise NotImplementedError(f"Reward function is not implemented for {data_source=}")
 

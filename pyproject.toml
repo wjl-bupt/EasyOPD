@@ -112,3 +112,7 @@ verl = [
   "trainer/config/*/*.yaml",
   "experimental/*/config/*.yaml",
 ]
+easyopd = [
+  "methods/ropd/prompts/*.txt",
+  "config/ropd/*.yaml",
+]

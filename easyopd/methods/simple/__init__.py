@@ -27,7 +27,10 @@
 
 from dataclasses import dataclass
 
+from easyopd.registry import register_method
 
+
+@register_method("simple")
 @dataclass(frozen=True)
 class SimpleMethod:
     """Static metadata describing the EasyOPD `simple` method."""
@@ -43,6 +46,7 @@ class SimpleMethod:
         "between student and teacher tokenizers, with character-level "
         "greedy sequence alignment."
     )
+    paper_url: str = "https://arxiv.org/abs/2410.XXXXX"  # Simple cross-tokenizer OPD
 
 
 METHOD = SimpleMethod()
