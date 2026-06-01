@@ -109,6 +109,18 @@ DATASET_RECIPES: dict[str, dict[str, Any]] = {
         "prompt_template": "prompt_only",
         "description": "SafeChain dataset for OPSA safety self-distillation",
     },
+    "ropd": {
+        "dataset": "openai/gsm8k",
+        "dataset_split": "train",
+        "prompt_template": "math_qa",
+        "description": (
+            "Placeholder; replace with the rubric dataset used in ROPD "
+            "experiments. ROPD is a black-box reward-manager method whose "
+            "training signal is produced by a teacher + rubricator + "
+            "verifier judge triple over each rollout, so it works on any "
+            "instruction-style dataset that exposes a prompt field."
+        ),
+    },
     "vision_opd": {
         "dataset": "HuggingFaceM4/DocumentVQA",
         "dataset_split": "train",
