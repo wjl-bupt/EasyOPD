@@ -34,7 +34,8 @@ def test_train_ropd_dryrun_exits_zero(dryrun_output: str) -> None:
 def test_train_ropd_dryrun_emits_canonical_command(dryrun_output: str) -> None:
     assert "python3" in dryrun_output
     assert "verl.trainer.main_ppo" in dryrun_output
-    assert "reward.reward_manager.name=ropd" in dryrun_output
+    assert "reward_model.reward_manager=ropd" in dryrun_output
+    assert "+reward_model.reward_kwargs.ropd.provider_resolution.spec_path=" in dryrun_output
 
 
 def test_train_ropd_dryrun_prints_project_root(dryrun_output: str) -> None:

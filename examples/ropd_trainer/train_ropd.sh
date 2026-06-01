@@ -5,8 +5,8 @@
 # `ropd` reward manager registered by `easyopd.methods.ropd`.
 #
 # Required toggles handled by this script:
-#   - reward.reward_manager.name=ropd
-#   - reward_model.reward_kwargs.ropd.provider_resolution.spec_path=easyopd/config/ropd/judge_providers.yaml
+#   - reward_model.reward_manager=ropd
+#   - +reward_model.reward_kwargs.ropd.provider_resolution.spec_path=easyopd/config/ropd/judge_providers.yaml
 #
 # Environment variables (all optional, all prefixed `ROPD_*`):
 #   ROPD_DRYRUN             "true" to print the assembled command without running.
@@ -58,10 +58,9 @@ fi
 
 # ----- assemble Hydra command -----
 HYDRA_OVERRIDES=(
-    "reward.reward_manager.name=ropd"
     "reward_model.reward_manager=ropd"
-    "reward_model.reward_kwargs.ropd.provider_resolution.spec_path=$ROPD_JUDGE_PROVIDERS_PATH"
-    "reward_model.reward_kwargs.ropd.provider_resolution.entrypoint=train"
+    "+reward_model.reward_kwargs.ropd.provider_resolution.spec_path=$ROPD_JUDGE_PROVIDERS_PATH"
+    "+reward_model.reward_kwargs.ropd.provider_resolution.entrypoint=train"
     "data.train_files=$DATA_TRAIN_FILES"
     "data.val_files=$DATA_VAL_FILES"
     "actor_rollout_ref.model.path=$ROPD_STUDENT_MODEL_PATH"

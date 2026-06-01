@@ -18,7 +18,7 @@ def test_base_yaml_parses_and_uses_ropd_names() -> None:
     assert "shared_rubrics" not in rendered
     assert "BLACK_OPD_" not in rendered
     assert "black_opd" not in rendered
-    assert cfg["reward"]["reward_manager"]["name"] == "ropd"
+    assert cfg["reward_model"]["reward_manager"] == "ropd"
 
 
 def test_judge_yaml_parses_and_targets_ropd_reward_kwargs() -> None:

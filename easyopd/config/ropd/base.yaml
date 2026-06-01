@@ -5,7 +5,7 @@
 # via Hydra CLI overrides; the shell script is the canonical entry point.
 #
 # Required toggles:
-#   - reward.reward_manager.name=ropd
+#   - reward_model.reward_manager=ropd
 #   - reward_model.reward_kwargs.ropd.provider_resolution.spec_path=easyopd/config/ropd/judge_providers.yaml
 #
 # Notes:
@@ -32,9 +32,8 @@ actor_lr: 1.0e-6
 total_epochs: 3
 
 # ---------- reward manager wiring ---------- #
-reward:
-  reward_manager:
-    name: ropd
+reward_model:
+  reward_manager: ropd
 
 # ---------- ROPD-specific overrides ---------- #
 distillation:

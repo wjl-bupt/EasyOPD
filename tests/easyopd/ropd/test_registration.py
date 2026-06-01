@@ -1,5 +1,17 @@
 from __future__ import annotations
 
+import importlib
+
+
+def test_verl_reward_manager_import_auto_registers_ropd() -> None:
+    import verl.workers.reward_manager as reward_manager_module
+    from easyopd.methods.ropd.reward_manager import ROPDRewardManager
+    from verl.workers.reward_manager.registry import REWARD_MANAGER_REGISTRY, get_reward_manager_cls
+
+    REWARD_MANAGER_REGISTRY.pop("ropd", None)
+    importlib.reload(reward_manager_module)
+    assert get_reward_manager_cls("ropd") is ROPDRewardManager
+
 
 def test_register_ropd_reward_manager_is_idempotent() -> None:
     from easyopd.methods.ropd.reward_manager import (

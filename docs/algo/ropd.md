@@ -45,7 +45,7 @@ easyopd/methods/ropd/
 
 The reward manager is registered under the name `ropd` into verl's
 `verl.workers.reward_manager` registry, so the standard launcher resolves it via
-`reward.reward_manager.name=ropd`.
+`reward_model.reward_manager=ropd`.
 
 ## Teacher / rubricator / verifier roles
 
@@ -71,7 +71,7 @@ stale teacher index cannot silently mismatch the current configuration.
 Two repo-side YAML templates are provided:
 
 - `easyopd/config/ropd/base.yaml` — ROPD-specific overrides on top of the
-  default verl PPO trainer config. Sets `reward.reward_manager.name=ropd` and
+  default verl PPO trainer config. Sets `reward_model.reward_manager=ropd` and
   the student model defaults.
 - `easyopd/config/ropd/judge.yaml` — judge knobs that live under
   `reward_model.reward_kwargs.ropd.*`, including the provider resolution spec

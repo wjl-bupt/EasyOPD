@@ -4,7 +4,7 @@ Canonical launcher for the **ROPD** (Rubric-based On-policy Distillation) method
 inside EasyOPD. The Python implementation lives in
 `easyopd/methods/ropd/`; the reward manager is registered into verl's
 reward-manager registry under the name `ropd`, so the standard `verl.trainer.main_ppo`
-entrypoint can resolve it via `reward.reward_manager.name=ropd`.
+entrypoint can resolve it via `reward_model.reward_manager=ropd`.
 
 ## Quick start
 

@@ -819,6 +819,19 @@ class ROPDRewardManager(AbstractRewardManager):
             time.sleep(sleep_seconds)
 
     @staticmethod
+    def _extract_reward_from_rm_scores(data: DataProto, return_dict: bool) -> torch.Tensor | dict[str, Any] | None:
+        if data.batch is None or "rm_scores" not in data.batch.keys():
+            return None
+
+        if return_dict:
+            reward_extra_keys = data.meta_info.get("reward_extra_keys", [])
+            reward_extra_info = {
+                key: data.non_tensor_batch[key] for key in reward_extra_keys if key in data.non_tensor_batch
+            }
+            return {"reward_tensor": data.batch["rm_scores"], "reward_extra_info": reward_extra_info}
+        return data.batch["rm_scores"]
+
+    @staticmethod
     def _compute_effective_group_rate(*, effective_group_count: int, total_group_count: int) -> float:
         if total_group_count <= 0:
             return 0.0
