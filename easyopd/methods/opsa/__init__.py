@@ -20,6 +20,7 @@ from easyopd.methods.opsa.core import (
     compute_early_window_weights,
     opsa_loss,
 )
+from easyopd.registry import register_method
 
 __all__ = [
     "compute_teacher_flip_rate",
@@ -30,6 +31,7 @@ __all__ = [
 ]
 
 
+@register_method("opsa")
 class OPSAMethod:
     """OPSA: On-Policy Self-Distillation for Safety Alignment.
 
