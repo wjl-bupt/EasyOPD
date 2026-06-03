@@ -23,7 +23,7 @@ from typing import Any
 
 import torch
 
-from easyopd.hooks import Config, LossHook, Metrics, RolloutHook
+from easyopd.hooks import Config, LossHook, Metrics, RolloutHook, LossContext
 
 
 class SODLossHook:
@@ -98,6 +98,61 @@ class SODLossHook:
         # SOD modifies advantages rather than producing a separate loss
         # Return the weighted advantages as "loss" (to be used by the caller)
         return weighted_advantages.sum() / mask.sum().clamp(min=1), metrics
+
+    def compute_loss_with_context(
+        self,
+        context: LossContext,
+    ) -> tuple[torch.Tensor, Metrics]:
+        """Compute loss using the unified LossContext interface.
+        
+        This is the new preferred interface that supports all OPD method types.
+        """
+        from easyopd.methods.sod.core import apply_stepwise_opd, compute_stepwise_opd_weights
+
+        # Extract parameters from LossContext
+        advantages = context.advantages
+        old_log_probs = context.old_log_probs
+        response_mask = context.response_mask
+        config = context.config
+
+        epsilon = config.get("epsilon", 1e-6) if isinstance(config, dict) else getattr(config, "epsilon", 1e-6)
+        delta = config.get("delta", 0.5) if isinstance(config, dict) else getattr(config, "delta", 0.5)
+
+        if advantages is None:
+            # If no advantages provided, just compute weights for diagnostics
+            weight_mask, step_info = compute_stepwise_opd_weights(
+                old_log_probs=old_log_probs,
+                ref_log_prob=context.teacher_log_probs,
+                response_mask=response_mask,
+                epsilon=epsilon,
+                delta=delta,
+            )
+            # Return zero loss with weight diagnostics
+            metrics = {
+                "sod/mean_weight": weight_mask[response_mask.bool()].mean().item() if response_mask.any() else 0.0,
+                "sod/num_steps": sum(len(info.get("steps", [])) for info in step_info) / max(len(step_info), 1),
+            }
+            return torch.tensor(0.0, device=old_log_probs.device), metrics
+
+        # Apply step-wise OPD to advantages
+        weighted_advantages, step_info = apply_stepwise_opd(
+            advantages=advantages,
+            old_log_probs=old_log_probs,
+            ref_log_prob=context.teacher_log_probs,
+            response_mask=response_mask,
+            epsilon=epsilon,
+            delta=delta,
+        )
+
+        metrics = {
+            "sod/mean_weight": (weighted_advantages / (advantages + 1e-8))[response_mask.bool()].mean().item()
+            if response_mask.any() and advantages.abs().sum() > 0
+            else 1.0,
+        }
+
+        # SOD modifies advantages rather than producing a separate loss
+        # Return the weighted advantages as "loss" (to be used by the caller)
+        return weighted_advantages.sum() / response_mask.sum().clamp(min=1), metrics
 
 
 class SODRolloutHook:

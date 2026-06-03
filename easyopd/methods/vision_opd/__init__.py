@@ -52,7 +52,7 @@ __all__ = [
 ]
 
 
-@register_method("vision_opd")
+@register_method("vision_opd", loss_mode_aliases=("vopd",))
 class VisionOPDMethod:
     """Vision-OPD: Learning to See Fine-Grained Details for Multimodal LLMs
     via On-Policy Self-Distillation.

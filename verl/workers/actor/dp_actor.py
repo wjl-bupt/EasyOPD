@@ -91,9 +91,24 @@ class DataParallelPPOActor(BasePPOActor):
         )
         self.device_name = get_device_name()
 
-        # ============ [EasyOPD] Hook Dispatcher reference ============
-        # Will be set by the trainer after initialization if hook-based dispatch is active.
+        # ============ [EasyOPD] Hook Dispatcher initialization ============
+        # Eagerly construct the HookDispatcher from the actor config so that the
+        # actor worker can route method-specific logic through the unified hook
+        # interface without requiring the trainer to push the dispatcher in.
+        # When no EasyOPD method is configured, dispatcher.enabled is False and
+        # the hot path falls through to vanilla PPO with O(1) overhead.
         self._hook_dispatcher = None
+        try:
+            from easyopd.hook_dispatch import HookDispatcher
+
+            self._hook_dispatcher = HookDispatcher.from_config(
+                self.config,
+                auto_resolve_data=False,
+            )
+        except Exception as _easyopd_init_err:  # noqa: BLE001
+            # Never fail actor initialization due to dispatcher setup; fall
+            # back to the legacy vanilla PPO code path.
+            self._hook_dispatcher = None
         # ============ [EasyOPD] End ============
 
     def _forward_micro_batch(
@@ -543,7 +558,15 @@ class DataParallelPPOActor(BasePPOActor):
 
         # ============ [EasyOPD] Include self-distillation keys ============
         loss_mode = self.config.policy_loss.get("loss_mode", "vanilla")
-        vopd_enabled = loss_mode == "vopd"
+        # Resolve loss_mode through the registry alias mapping so that
+        # historical names (e.g. "vopd") map to canonical method names
+        # (e.g. "vision_opd") without hardcoding the mapping here.
+        try:
+            from easyopd.registry import resolve_method_name as _resolve
+            _resolved_method = _resolve(loss_mode) if loss_mode else None
+        except Exception:  # noqa: BLE001
+            _resolved_method = loss_mode
+        vopd_enabled = _resolved_method == "vision_opd"
         if vopd_enabled:
             vopd_required_keys = [
                 "teacher_input_ids",
@@ -701,7 +724,12 @@ class DataParallelPPOActor(BasePPOActor):
                     # gpg -> verl.trainer.ppo.core_algos.compute_policy_loss_gpg
                     # clip_cov -> verl.trainer.ppo.core_algos.compute_policy_loss_clip_cov
                     # ============ [EasyOPD] VOPD loss mode ============
-                    if loss_mode == "vopd":
+                    try:
+                        from easyopd.registry import resolve_method_name as _resolve_lm
+                        _vopd_active = _resolve_lm(loss_mode) == "vision_opd" if loss_mode else False
+                    except Exception:  # noqa: BLE001
+                        _vopd_active = (loss_mode == "vision_opd")
+                    if _vopd_active:
                         from easyopd.methods.vision_opd.core import compute_self_distillation_loss as vopd_loss_fn
 
                         self_distillation_cfg = getattr(self.config, "self_distillation", None)

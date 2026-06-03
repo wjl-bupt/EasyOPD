@@ -35,7 +35,7 @@ from typing import Any
 
 import torch
 
-from easyopd.hooks import Batch, Config, LossHook, Metrics, RewardHook
+from easyopd.hooks import Batch, Config, LossHook, Metrics, RewardHook, LossContext
 
 
 class ROPDLossHook:
@@ -80,6 +80,22 @@ class ROPDLossHook:
         # is compatible with whatever accumulator the caller is using.
         if isinstance(student_logits, torch.Tensor):
             zero = torch.zeros((), dtype=student_logits.dtype, device=student_logits.device)
+        else:
+            zero = torch.zeros(())
+        return zero, {}
+
+    def compute_loss_with_context(
+        self,
+        context: LossContext,
+    ) -> tuple[torch.Tensor, Metrics]:
+        """Return a no-op zero loss using the unified LossContext interface.
+        
+        ROPD is a black-box method that does not modify the actor loss.
+        The training signal flows entirely through rewards.
+        """
+        # Use context's device/dtype if available
+        if context.student_log_probs is not None:
+            zero = torch.zeros((), dtype=context.student_log_probs.dtype, device=context.student_log_probs.device)
         else:
             zero = torch.zeros(())
         return zero, {}

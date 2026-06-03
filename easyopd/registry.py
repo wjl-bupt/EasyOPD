@@ -49,6 +49,9 @@ logger = logging.getLogger(__name__)
 
 _REGISTRY: dict[str, Type[Any]] = {}
 
+# Maps loss_mode aliases to canonical method names
+_ALIAS_REGISTRY: dict[str, str] = {}
+
 
 class MethodNotFoundError(KeyError):
     """Raised when a requested method name is not found in the registry."""
@@ -69,26 +72,33 @@ class MethodNotFoundError(KeyError):
 # ---------------------------------------------------------------------------
 
 
-def register_method(name: str) -> Callable[[Type], Type]:
+def register_method(
+    name: str,
+    loss_mode_aliases: tuple[str, ...] = (),
+) -> Callable[[Type], Type]:
     """Decorator that registers an OPD method class under the given name.
 
     Args:
         name: The unique string identifier for this method (e.g. "simple",
               "gkd", "sod"). This is the name users will specify in config
               files or ``from_hparams()`` calls.
+        loss_mode_aliases: Optional tuple of alternative names that should
+              resolve to this canonical method name. Useful for backward
+              compatibility (e.g. ``("vopd",)`` for ``"vision_opd"``).
 
     Returns:
         A decorator that registers the class and returns it unchanged.
 
     Raises:
-        ValueError: If a method with the same name is already registered.
+        ValueError: If a method with the same name is already registered,
+              or if an alias conflicts with another registered method/alias.
 
     Example::
 
-        @register_method("gkd")
-        class GKDMethod:
-            name = "gkd"
-            description = "Generalized Knowledge Distillation"
+        @register_method("vision_opd", loss_mode_aliases=("vopd",))
+        class VisionOPDMethod:
+            name = "vision_opd"
+            description = "Vision On-Policy Distillation"
             ...
     """
 
@@ -102,7 +112,20 @@ def register_method(name: str) -> Callable[[Type], Type]:
                 f"{cls.__module__}.{cls.__qualname__}."
             )
         _REGISTRY[name] = cls
-        logger.debug("Registered EasyOPD method: %s -> %s", name, cls.__qualname__)
+        # Register aliases
+        for alias in loss_mode_aliases:
+            if alias in _REGISTRY:
+                raise ValueError(
+                    f"Cannot register alias '{alias}' for method '{name}': "
+                    f"alias conflicts with an existing method name."
+                )
+            if alias in _ALIAS_REGISTRY and _ALIAS_REGISTRY[alias] != name:
+                raise ValueError(
+                    f"Cannot register alias '{alias}' for method '{name}': "
+                    f"already mapped to '{_ALIAS_REGISTRY[alias]}'."
+                )
+            _ALIAS_REGISTRY[alias] = name
+        logger.debug("Registered EasyOPD method: %s -> %s (aliases=%s)", name, cls.__qualname__, loss_mode_aliases)
         return cls
 
     return decorator
@@ -143,6 +166,32 @@ def get_all_methods() -> dict[str, Type[Any]]:
 def is_registered(name: str) -> bool:
     """Check whether a method name is registered."""
     return name in _REGISTRY
+
+
+def resolve_method_name(loss_mode_or_alias: str) -> str:
+    """Resolve a method name or alias to its canonical registered name.
+
+    Args:
+        loss_mode_or_alias: The name from a yaml config's ``loss_mode``
+                           field, which may be either a canonical method
+                           name or a registered alias.
+
+    Returns:
+        The canonical method name.
+
+    Raises:
+        MethodNotFoundError: If neither name nor alias is registered.
+    """
+    if loss_mode_or_alias in _REGISTRY:
+        return loss_mode_or_alias
+    if loss_mode_or_alias in _ALIAS_REGISTRY:
+        return _ALIAS_REGISTRY[loss_mode_or_alias]
+    raise MethodNotFoundError(loss_mode_or_alias)
+
+
+def list_aliases() -> dict[str, str]:
+    """Return a copy of the alias mapping (alias -> canonical name)."""
+    return dict(_ALIAS_REGISTRY)
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +274,7 @@ def _reset_registry() -> None:
 
     global _DISCOVERED
     _REGISTRY.clear()
+    _ALIAS_REGISTRY.clear()
     _DISCOVERED = False
 
     # Remove cached method modules so re-import triggers registration

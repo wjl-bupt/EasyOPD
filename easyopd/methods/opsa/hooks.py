@@ -28,7 +28,7 @@ from typing import Any
 
 import torch
 
-from easyopd.hooks import Config, LossHook, Metrics, TeacherSidecarHook
+from easyopd.hooks import Config, LossHook, Metrics, TeacherSidecarHook, LossContext
 
 
 def _cfg_get(config: Any, key: str, default: Any) -> Any:
@@ -88,6 +88,51 @@ class OPSALossHook:
             student_logits=student_logits,
             teacher_logits=teacher_logits,
             response_mask=mask,
+            temperature=temperature,
+            window_size=window_size,
+            decay_type=decay_type,
+            min_weight=min_weight,
+            use_window_weighting=use_window_weighting,
+            loss_agg_mode=loss_agg_mode,
+        )
+
+        # Ensure metrics_dict only contains float-castable scalars (LossHook contract).
+        clean_metrics: Metrics = {}
+        for k, v in (metrics_dict or {}).items():
+            try:
+                clean_metrics[k] = float(v.item()) if isinstance(v, torch.Tensor) else float(v)
+            except (TypeError, ValueError):
+                continue
+
+        return loss, clean_metrics
+
+    def compute_loss_with_context(
+        self,
+        context: LossContext,
+    ) -> tuple[torch.Tensor, Metrics]:
+        """Compute loss using the unified LossContext interface.
+        
+        This is the new preferred interface that supports all OPD method types.
+        """
+        from easyopd.methods.opsa.core import opsa_loss
+
+        # Extract parameters from LossContext
+        student_logits = context.student_log_probs
+        teacher_logits = context.teacher_log_probs
+        response_mask = context.response_mask
+        config = context.config
+
+        temperature = float(_cfg_get(config, "opsa_temperature", _cfg_get(config, "temperature", 1.0)))
+        window_size = int(_cfg_get(config, "opsa_window_size", _cfg_get(config, "window_size", 32)))
+        decay_type = str(_cfg_get(config, "opsa_decay_type", _cfg_get(config, "decay_type", "linear")))
+        min_weight = float(_cfg_get(config, "opsa_min_weight", _cfg_get(config, "min_weight", 0.1)))
+        use_window_weighting = bool(_cfg_get(config, "opsa_use_window_weighting", _cfg_get(config, "use_window_weighting", True)))
+        loss_agg_mode = str(_cfg_get(config, "opsa_loss_agg_mode", _cfg_get(config, "loss_agg_mode", "token-mean")))
+
+        loss, metrics_dict = opsa_loss(
+            student_logits=student_logits,
+            teacher_logits=teacher_logits,
+            response_mask=response_mask,
             temperature=temperature,
             window_size=window_size,
             decay_type=decay_type,

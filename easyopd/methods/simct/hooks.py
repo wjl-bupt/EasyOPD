@@ -23,7 +23,7 @@ from typing import Any
 
 import torch
 
-from easyopd.hooks import Config, LossHook, Metrics
+from easyopd.hooks import Config, LossHook, Metrics, LossContext
 
 
 class SimCTLossHook:
@@ -45,12 +45,35 @@ class SimCTLossHook:
         Delegates to the existing simct loss implementation which uses
         span virtual-vocabulary logits on top of the shared overlap vocabulary.
         """
-        from easyopd.methods.simct.losses import compute_simct_loss
+        from easyopd.methods.simct.losses import compute_distillation_loss_simct_cross_tokenizer
 
         model_output = kwargs.get("model_output", {})
         response_mask = kwargs.get("response_mask", mask)
 
-        loss, metrics_dict = compute_simct_loss(
+        loss, metrics_dict = compute_distillation_loss_simct_cross_tokenizer(
+            model_output=model_output,
+            response_mask=response_mask,
+            config=config,
+        )
+
+        return loss, metrics_dict
+
+    def compute_loss_with_context(
+        self,
+        context: LossContext,
+    ) -> tuple[torch.Tensor, Metrics]:
+        """Compute loss using the unified LossContext interface.
+        
+        This is the new preferred interface that supports all OPD method types.
+        """
+        from easyopd.methods.simct.losses import compute_distillation_loss_simct_cross_tokenizer
+
+        # Extract parameters from LossContext
+        model_output = context.model_inputs or {}
+        response_mask = context.response_mask
+        config = context.config
+
+        loss, metrics_dict = compute_distillation_loss_simct_cross_tokenizer(
             model_output=model_output,
             response_mask=response_mask,
             config=config,

@@ -1,0 +1,5 @@
+# EasyOPD echo_kd demo method config.
+# Demonstrates the minimal yaml needed to enable a new method.
+easyopd:
+  method:
+    name: echo_kd

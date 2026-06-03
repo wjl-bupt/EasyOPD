@@ -40,6 +40,7 @@ from easyopd.hooks import (
     AlignmentHook,
     Batch,
     Config,
+    LossContext,
     LossHook,
     MethodHooks,
     Metrics,
@@ -162,8 +163,12 @@ class HookDispatcher:
         mask: torch.Tensor,
         **kwargs: Any,
     ) -> tuple[Optional[torch.Tensor], Metrics]:
-        """Dispatch to the method's LossHook.
-
+        """Dispatch to the method's LossHook (legacy signature).
+        
+        This method maintains backward compatibility with the existing
+        signature. Internally it constructs a LossContext and calls
+        the new compute_loss_with_context method.
+        
         Args:
             student_logits: Student model output logits.
             teacher_logits: Teacher model output logits.
@@ -176,13 +181,131 @@ class HookDispatcher:
         if not self._enabled or not self.hooks.has_loss:
             return None, {}
 
-        return self.hooks.loss_hook.compute_loss(
-            student_logits=student_logits,
-            teacher_logits=teacher_logits,
-            mask=mask,
+        # Construct LossContext from legacy parameters
+        context = LossContext(
+            student_log_probs=student_logits,
+            teacher_log_probs=teacher_logits,
+            response_mask=mask,
             config=self.config,
-            **kwargs,
+            extra_kwargs=kwargs,
         )
+        
+        return self.compute_loss_with_context(context)
+
+    def compute_loss_with_context(
+        self,
+        context: LossContext,
+    ) -> tuple[Optional[torch.Tensor], Metrics]:
+        """Dispatch to the method's LossHook using unified LossContext.
+        
+        This is the new preferred interface that supports all OPD method types.
+        
+        Args:
+            context: LossContext containing all necessary data for loss computation.
+
+        Returns:
+            Tuple of (loss, metrics). Returns (None, {}) if no LossHook is active.
+        """
+        if not self._enabled or not self.hooks.has_loss:
+            return None, {}
+
+        # For backward compatibility, also support the legacy signature
+        # by checking if the hook implements the new method
+        if hasattr(self.hooks.loss_hook, 'compute_loss_with_context'):
+            return self.hooks.loss_hook.compute_loss_with_context(context)
+        else:
+            # Fall back to legacy signature with deprecation warning
+            # (warned once per (method_name, hook_class) pair to avoid
+            # hot-path log spam).
+            if not getattr(self, "_legacy_loss_signature_warned", False):
+                import warnings
+                warnings.warn(
+                    f"LossHook for method '{self.method_name}' does not implement "
+                    "compute_loss_with_context(). Using legacy signature. "
+                    "Please update your hook implementation.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+                self._legacy_loss_signature_warned = True
+
+            # Convert context to legacy kwargs
+            kwargs = context.to_kwargs()
+            return self.hooks.loss_hook.compute_loss(**kwargs)
+
+    def compute_advantage_correction(
+        self,
+        advantages: torch.Tensor,
+        old_log_probs: torch.Tensor,
+        response_mask: torch.Tensor,
+        **kwargs: Any,
+    ) -> tuple[Optional[torch.Tensor], Metrics]:
+        """Dispatch advantage correction for methods like SOD.
+        
+        This method specifically handles advantage-based methods that
+        modify the advantage weights rather than computing a separate loss.
+        
+        Args:
+            advantages: Base advantages from PPO.
+            old_log_probs: Old action log probabilities.
+            response_mask: Response position mask.
+            **kwargs: Additional context.
+
+        Returns:
+            Tuple of (corrected_advantages, metrics). Returns (None, {}) if
+            no advantage correction is needed.
+        """
+        if not self._enabled or not self.hooks.has_loss:
+            return None, {}
+
+        # Construct LossContext for advantage-based methods
+        context = LossContext(
+            advantages=advantages,
+            old_log_probs=old_log_probs,
+            response_mask=response_mask,
+            config=self.config,
+            extra_kwargs=kwargs,
+        )
+        
+        return self.compute_loss_with_context(context)
+
+    def build_teacher_batch(
+        self,
+        batch: Batch,
+        reward_tensor: Optional[torch.Tensor] = None,
+        **kwargs: Any,
+    ) -> Batch:
+        """Dispatch teacher batch construction for methods like VOPD/OPSA.
+        
+        This method handles the construction of teacher-specific batch data
+        that needs to be prepared before the teacher forward pass.
+        
+        Args:
+            batch: The training batch.
+            reward_tensor: Optional reward tensor for teacher conditioning.
+            **kwargs: Additional context.
+
+        Returns:
+            The (possibly modified) batch with teacher-specific data.
+        """
+        if not self._enabled:
+            return batch
+
+        # Check if the method has a teacher batch builder hook
+        # This is a new hook type that we'll need to define
+        if hasattr(self.hooks, 'teacher_batch_hook'):
+            return self.hooks.teacher_batch_hook.build_teacher_batch(
+                batch=batch,
+                reward_tensor=reward_tensor,
+                config=self.config,
+                **kwargs,
+            )
+        
+        # Fallback: try to use teacher_sidecar_hook if available
+        if self.hooks.has_teacher_sidecar:
+            # Some methods might handle batch construction in teacher_forward
+            return batch
+        
+        return batch
 
     def on_rollout_end(self, batch: Batch, **kwargs: Any) -> Batch:
         """Dispatch to the method's RolloutHook.
@@ -290,34 +413,47 @@ class HookDispatcher:
             - OmegaConf DictConfig with nested access
             - Plain dict
             - Config with `easyopd.method.name` path
+
+        Aliases (e.g. "vopd" -> "vision_opd") are resolved through the
+        registry's alias mapping; no hardcoded whitelist is used.
         """
+        from easyopd.registry import resolve_method_name, MethodNotFoundError
+
+        candidate: Optional[str] = None
+
         # Try OmegaConf-style access
         try:
             from omegaconf import OmegaConf
 
             if hasattr(config, "_metadata"):  # OmegaConf object
-                name = OmegaConf.select(config, "easyopd.method.name", default=None)
-                if name:
-                    return name
-                # Fallback: check actor.policy_loss.loss_mode for legacy configs
-                name = OmegaConf.select(config, "actor_rollout_ref.actor.policy_loss.loss_mode", default=None)
-                if name and name in ("simple", "simct", "gkd", "sod", "g_opd", "opcd", "vision_opd", "sdpo", "vopd"):
-                    # Map vopd -> vision_opd
-                    if name == "vopd":
-                        return "vision_opd"
-                    return name
+                candidate = OmegaConf.select(config, "easyopd.method.name", default=None)
+                if not candidate:
+                    # Fallback: check actor.policy_loss.loss_mode for legacy configs
+                    candidate = OmegaConf.select(
+                        config,
+                        "actor_rollout_ref.actor.policy_loss.loss_mode",
+                        default=None,
+                    )
         except ImportError:
             pass
 
         # Try plain dict access
-        if isinstance(config, dict):
+        if not candidate and isinstance(config, dict):
             easyopd_cfg = config.get("easyopd", {})
             if isinstance(easyopd_cfg, dict):
                 method_cfg = easyopd_cfg.get("method", {})
                 if isinstance(method_cfg, dict):
-                    return method_cfg.get("name")
+                    candidate = method_cfg.get("name")
 
-        return None
+        if not candidate:
+            return None
+
+        # Resolve aliases through registry (no hardcoded whitelist)
+        try:
+            return resolve_method_name(candidate)
+        except MethodNotFoundError:
+            # Unknown method name; return as-is so caller can handle gracefully
+            return candidate
 
     @staticmethod
     def _extract_method_config(config: Any) -> dict:

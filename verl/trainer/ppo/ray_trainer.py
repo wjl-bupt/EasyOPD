@@ -2355,7 +2355,13 @@ class RayPPOTrainer:
                     if self.config.trainer.critic_warmup <= self.global_steps:
                         # ============ [EasyOPD] Build self-distillation batch ============
                         vopd_loss_mode = self.config.actor_rollout_ref.actor.policy_loss.get("loss_mode", "vanilla")
-                        if vopd_loss_mode == "vopd":
+                        # Resolve through registry alias mapping (no hardcoded names).
+                        try:
+                            from easyopd.registry import resolve_method_name as _resolve_lm
+                            _resolved_lm = _resolve_lm(vopd_loss_mode) if vopd_loss_mode else None
+                        except Exception:  # noqa: BLE001
+                            _resolved_lm = vopd_loss_mode
+                        if _resolved_lm == "vision_opd":
                             vopd_result = self._maybe_build_vision_opd_batch(batch, reward_tensor)
                             if vopd_result is not None:
                                 vopd_batch_data, vopd_metrics = vopd_result

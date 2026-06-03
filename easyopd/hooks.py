@@ -46,6 +46,74 @@ Metrics = dict[str, float]
 
 
 # ---------------------------------------------------------------------------
+# Loss Context Data Class
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass
+from typing import Optional
+
+
+@dataclass
+class LossContext:
+    """Unified context for OPD loss computation.
+    
+    This dataclass provides a standardized interface for all OPD methods,
+    supporting logit-based, advantage-based, and reward-based approaches
+    without losing any existing method's required information.
+    """
+    # Core tensors for logit-based methods (vopd, opsa, gkd, simple, simct)
+    student_log_probs: Optional[torch.Tensor] = None
+    teacher_log_probs: Optional[torch.Tensor] = None
+    response_mask: Optional[torch.Tensor] = None
+    
+    # For advantage-based methods (sod)
+    advantages: Optional[torch.Tensor] = None
+    old_log_probs: Optional[torch.Tensor] = None
+    
+    # For reward-based methods (ropd, gad)
+    rewards: Optional[torch.Tensor] = None
+    
+    # Additional context needed by various methods
+    model_inputs: Optional[dict] = None
+    actor_ref: Optional[Any] = None
+    config: Optional[Config] = None
+    
+    # For compatibility with existing kwargs-based interface
+    extra_kwargs: Optional[dict] = None
+    
+    def __post_init__(self):
+        """Ensure backward compatibility with existing kwargs usage."""
+        if self.extra_kwargs is None:
+            self.extra_kwargs = {}
+        
+        # Auto-populate extra_kwargs with standard fields for compatibility
+        if self.advantages is not None and "advantages" not in self.extra_kwargs:
+            self.extra_kwargs["advantages"] = self.advantages
+        if self.old_log_probs is not None and "old_log_probs" not in self.extra_kwargs:
+            self.extra_kwargs["old_log_probs"] = self.old_log_probs
+        if self.model_inputs is not None and "model_output" not in self.extra_kwargs:
+            self.extra_kwargs["model_output"] = self.model_inputs
+        if self.response_mask is not None and "response_mask" not in self.extra_kwargs:
+            self.extra_kwargs["response_mask"] = self.response_mask
+
+    def to_kwargs(self) -> dict:
+        """Convert to kwargs format for backward compatibility."""
+        kwargs = {}
+        if self.student_log_probs is not None:
+            kwargs["student_logits"] = self.student_log_probs
+        if self.teacher_log_probs is not None:
+            kwargs["teacher_logits"] = self.teacher_log_probs
+        if self.response_mask is not None:
+            kwargs["mask"] = self.response_mask
+        if self.config is not None:
+            kwargs["config"] = self.config
+        
+        # Include all extra_kwargs
+        kwargs.update(self.extra_kwargs)
+        return kwargs
+
+
+# ---------------------------------------------------------------------------
 # Hook Protocols
 # ---------------------------------------------------------------------------
 
