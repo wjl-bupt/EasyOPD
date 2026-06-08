@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Quick launcher for GRPO training - runs in foreground with output to file
+# Launcher for simple/simct KD training
+# Usage: bash launch_simple.sh [simple|simct]
 set -euo pipefail
+
+METHOD="simct"  # default to simple, can pass "simct"
 
 export PYTHONPATH="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD:${PYTHONPATH:-}"
 export TOKENIZERS_PARALLELISM=true
@@ -9,17 +12,20 @@ export RAY_ADDRESS=auto
 
 PYTHON="/opt/conda/envs/OpenAgentRL-sj/bin/python"
 EXPERIMENT_DIR="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/benchmark"
-DATA_DIR="${EXPERIMENT_DIR}/data"
-CHECKPOINT_DIR="${EXPERIMENT_DIR}/checkpoints/grpo"
-STUDENT_MODEL="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/models/Qwen2.5-1.5B-Instruct"
+DATA_DIR="${EXPERIMENT_DIR}/data_phi4mini"
+CHECKPOINT_DIR="${EXPERIMENT_DIR}/checkpoints/simct_phi4mini"
+# Cross-tokenizer KD: use Phi-4-mini (3.8B) as student, Qwen2.5-7B as teacher (via ref policy)
+# Model on SSD for faster loading
+STUDENT_MODEL="/root/workspace/models/phi4-mini-sft-warmup-10k-qwen-lr2e-6/checkpoint-40"
 REWARD_FN="${EXPERIMENT_DIR}/reward_fn.py"
 
 mkdir -p "${CHECKPOINT_DIR}"
 
-echo "[$(date)] Starting GRPO training..."
+echo "[$(date)] Starting ${METHOD} training..."
 
 exec ${PYTHON} -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
+    algorithm.use_kl_in_reward=True \
     "data.train_files=['${DATA_DIR}/train.parquet']" \
     "data.val_files=['${DATA_DIR}/val.parquet']" \
     data.train_batch_size=16 \
@@ -34,8 +40,11 @@ exec ${PYTHON} -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.use_torch_compile=False \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.actor.ppo_mini_batch_size=16 \
-    actor_rollout_ref.actor.ppo_epochs=1 \
+    actor_rollout_ref.actor.ppo_epochs=2 \
     actor_rollout_ref.actor.entropy_coeff=0.01 \
+    "++actor_rollout_ref.actor.policy_loss.loss_mode=${METHOD}" \
+    "++actor_rollout_ref.actor.policy_loss.simple_kl_direction=reverse" \
+    "++actor_rollout_ref.actor.policy_loss.simple_loss_clamp=10.0" \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=8192 \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
@@ -56,7 +65,7 @@ exec ${PYTHON} -m verl.trainer.main_ppo \
     trainer.balance_batch=True \
     'trainer.logger=["console"]' \
     trainer.project_name=easyopd_benchmark \
-    trainer.experiment_name=grpo \
+    trainer.experiment_name="${METHOD}" \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=1 \
     trainer.val_before_train=False \

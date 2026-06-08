@@ -141,6 +141,7 @@ outputs
 experiments/**/data*/
 experiments/**/teacher_sft_data/
 experiments/**/checkpoints/
+experiments/**/*_details.json
 
 # EasyOPD.pdf (binary)
 EasyOPD.pdf
