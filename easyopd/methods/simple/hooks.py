@@ -44,48 +44,77 @@ class SimpleLossHook:
     ) -> tuple[torch.Tensor, Metrics]:
         """Compute cross-tokenizer KL divergence loss.
 
-        Delegates to the existing simple loss implementation.
+        Delegates to the existing simple loss implementation when running
+        inside the full verl pipeline (model_output contains distillation_losses).
+        Falls back to a direct KL computation for standalone/benchmark usage.
         """
-        from easyopd.methods.simple.losses import (
-            compute_distillation_loss_simple_cross_tokenizer,
-        )
-
         # The simple method's loss function expects specific kwargs
         model_output = kwargs.get("model_output", {})
-        response_mask = kwargs.get("response_mask", mask)
 
-        loss, metrics_dict = compute_distillation_loss_simple_cross_tokenizer(
-            model_output=model_output,
-            response_mask=response_mask,
-            config=config,
-        )
+        # If distillation_losses are pre-computed by the logit processor (full pipeline),
+        # delegate to the full implementation
+        if "distillation_losses" in model_output:
+            from easyopd.methods.simple.losses import (
+                compute_distillation_loss_simple_cross_tokenizer,
+            )
+            distillation_config = kwargs.get("distillation_config", config)
+            data = kwargs.get("data")
+            loss, metrics_dict = compute_distillation_loss_simple_cross_tokenizer(
+                config=config,
+                distillation_config=distillation_config,
+                model_output=model_output,
+                data=data,
+            )
+            return loss, metrics_dict
 
-        return loss, metrics_dict
+        # Standalone fallback: compute simple forward KL between student and teacher
+        import torch.nn.functional as F
+        student_log_probs = F.log_softmax(student_logits, dim=-1)
+        teacher_probs = F.softmax(teacher_logits, dim=-1)
+        kl = F.kl_div(student_log_probs, teacher_probs, reduction="none").sum(dim=-1)
+        loss = (kl * mask).sum() / mask.sum().clamp(min=1)
+        metrics = {"simple/kl_div": loss.detach().item()}
+        return loss, metrics
 
     def compute_loss_with_context(
         self,
         context: LossContext,
     ) -> tuple[torch.Tensor, Metrics]:
         """Compute loss using the unified LossContext interface.
-        
+
         This is the new preferred interface that supports all OPD method types.
         """
-        from easyopd.methods.simple.losses import (
-            compute_distillation_loss_simple_cross_tokenizer,
-        )
-
         # Extract parameters from LossContext
         model_output = context.model_inputs or {}
-        response_mask = context.response_mask
         config = context.config
 
-        loss, metrics_dict = compute_distillation_loss_simple_cross_tokenizer(
-            model_output=model_output,
-            response_mask=response_mask,
-            config=config,
-        )
+        if "distillation_losses" in model_output:
+            from easyopd.methods.simple.losses import (
+                compute_distillation_loss_simple_cross_tokenizer,
+            )
+            distillation_config = (context.extra_kwargs or {}).get("distillation_config", config)
+            data = (context.extra_kwargs or {}).get("data")
+            loss, metrics_dict = compute_distillation_loss_simple_cross_tokenizer(
+                config=config,
+                distillation_config=distillation_config,
+                model_output=model_output,
+                data=data,
+            )
+            return loss, metrics_dict
 
-        return loss, metrics_dict
+        # Standalone fallback
+        import torch.nn.functional as F
+        student_logits = context.student_log_probs
+        teacher_logits = context.teacher_log_probs
+        mask = context.response_mask
+        if student_logits is not None and teacher_logits is not None and mask is not None:
+            student_log_probs = F.log_softmax(student_logits, dim=-1)
+            teacher_probs = F.softmax(teacher_logits, dim=-1)
+            kl = F.kl_div(student_log_probs, teacher_probs, reduction="none").sum(dim=-1)
+            loss = (kl * mask).sum() / mask.sum().clamp(min=1)
+            return loss, {"simple/kl_div": loss.detach().item()}
+
+        return torch.tensor(0.0), {}
 
 
 class SimpleAlignmentHook:

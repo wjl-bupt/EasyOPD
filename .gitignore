@@ -133,3 +133,14 @@ logs
 log
 outputs
 .history
+
+# codebuddy
+.codebuddy/
+
+# experiment data and models
+experiments/**/data*/
+experiments/**/teacher_sft_data/
+experiments/**/checkpoints/
+
+# EasyOPD.pdf (binary)
+EasyOPD.pdf

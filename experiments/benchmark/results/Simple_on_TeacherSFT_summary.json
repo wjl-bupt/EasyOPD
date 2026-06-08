@@ -1,0 +1,11 @@
+{
+  "model_name": "Simple_on_TeacherSFT",
+  "model_path": "/root/workspace/models/simple_on_teacher_sft",
+  "results": {
+    "gsm8k": {
+      "accuracy": 85.74677786201667,
+      "correct": 1131,
+      "total": 1319
+    }
+  }
+}

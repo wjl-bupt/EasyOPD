@@ -23,7 +23,13 @@ from typing import Any, List, Optional, Tuple
 import numpy as np
 import ray
 
-from easyopd.methods.simple.sglang_engine import EngineConfig, SGLangEngineService
+# Try SGLang first; fall back to HuggingFace engine if SGLang is not installed.
+try:
+    from easyopd.methods.simple.sglang_engine import EngineConfig, SGLangEngineService
+    _SGLANG_AVAILABLE = True
+except (ImportError, ModuleNotFoundError):
+    _SGLANG_AVAILABLE = False
+    from easyopd.methods.simple.hf_engine import HFEngineConfig, HFTeacherEngine
 
 logger = logging.getLogger(__name__)
 
@@ -116,26 +122,40 @@ class TeacherRayActor:
 
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-        engine_config = EngineConfig(
-            model_path=config.model_path,
-            tp_size=config.tp_size,
-            ep_size=config.ep_size,
-            pp_size=config.pp_size,
-            chunked_prefill_size=-1,
-            disable_radix_cache=True,
-            enable_return_hidden_states=True,
-            enable_memory_saver=True,
-            enable_weights_cpu_backup=True,
-            quantization=config.quantization,
-            mem_fraction_static=config.mem_fraction_static,
-            context_length=config.context_length,
-            offload_tags=config.offload_tags,
-            base_gpu_id=base_gpu_id,
-            nnodes=nnodes,
-            node_rank=node_rank,
-            dist_init_addr=dist_init_addr,
-        )
-        self.engine_service = SGLangEngineService(engine_config)
+        if _SGLANG_AVAILABLE:
+            engine_config = EngineConfig(
+                model_path=config.model_path,
+                tp_size=config.tp_size,
+                ep_size=config.ep_size,
+                pp_size=config.pp_size,
+                chunked_prefill_size=-1,
+                disable_radix_cache=True,
+                enable_return_hidden_states=True,
+                enable_memory_saver=True,
+                enable_weights_cpu_backup=True,
+                quantization=config.quantization,
+                mem_fraction_static=config.mem_fraction_static,
+                context_length=config.context_length,
+                offload_tags=config.offload_tags,
+                base_gpu_id=base_gpu_id,
+                nnodes=nnodes,
+                node_rank=node_rank,
+                dist_init_addr=dist_init_addr,
+            )
+            self.engine_service = SGLangEngineService(engine_config)
+        else:
+            logger.info(
+                "[TeacherRayActor] SGLang not available, using HF engine."
+            )
+            hf_config = HFEngineConfig(
+                model_path=config.model_path,
+                base_gpu_id=base_gpu_id,
+                mem_fraction_static=config.mem_fraction_static,
+                context_length=config.context_length,
+                quantization=config.quantization,
+            )
+            self.engine_service = HFTeacherEngine(hf_config)
+
         self.engine_service.start()
 
         if self.config.enable_sleep and self.node_rank == 0:

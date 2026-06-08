@@ -1,0 +1,16 @@
+{
+  "model_name": "simct_qwen2.5-1.5b",
+  "model_path": "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/benchmark/checkpoints/simct/merged_hf",
+  "results": {
+    "math500": {
+      "accuracy": 42.199999999999996,
+      "correct": 211,
+      "total": 500
+    },
+    "gsm8k": {
+      "accuracy": 6.368460955269144,
+      "correct": 84,
+      "total": 1319
+    }
+  }
+}

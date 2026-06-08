@@ -1,0 +1,16 @@
+{
+  "model_name": "simct_phi4mini",
+  "model_path": "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/benchmark/checkpoints/simct_phi4mini/merged_hf",
+  "results": {
+    "math500": {
+      "accuracy": 54.400000000000006,
+      "correct": 272,
+      "total": 500
+    },
+    "gsm8k": {
+      "accuracy": 83.54814253222138,
+      "correct": 1102,
+      "total": 1319
+    }
+  }
+}

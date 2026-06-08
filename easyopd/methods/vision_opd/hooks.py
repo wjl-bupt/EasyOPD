@@ -56,19 +56,35 @@ class VisionOPDLossHook:
         """
         from easyopd.methods.vision_opd.core import compute_self_distillation_loss
 
-        topk = config.get("topk", 10) if isinstance(config, dict) else getattr(config, "topk", 10)
-        temperature = config.get("temperature", 1.0) if isinstance(config, dict) else getattr(config, "temperature", 1.0)
+        alpha = config.get("alpha", 0.5) if isinstance(config, dict) else getattr(config, "alpha", 0.5)
+        full_logit_distillation = config.get("full_logit_distillation", True) if isinstance(config, dict) else getattr(config, "full_logit_distillation", True)
 
-        teacher_top_k_log_probs = kwargs.get("teacher_top_k_log_probs", teacher_logits)
-        teacher_top_k_ids = kwargs.get("teacher_top_k_ids")
+        # full_logit_distillation requires student_all_log_probs and teacher_all_log_probs
+        # which are only available in the full pipeline. Fall back to non-full mode.
+        student_all_log_probs = kwargs.get("student_all_log_probs")
+        teacher_all_log_probs = kwargs.get("teacher_all_log_probs")
+        if full_logit_distillation and student_all_log_probs is None:
+            full_logit_distillation = False
+            alpha = 1.0  # non-full-logit mode requires reverse KL (alpha=1.0)
+
+        # Vision-OPD expects per-token log-probs [batch, seq_len], not full logits
+        import torch.nn.functional as F
+        s_log_probs = student_logits
+        t_log_probs = teacher_logits
+        if s_log_probs.dim() == 3:
+            s_log_probs = F.log_softmax(s_log_probs, dim=-1).max(dim=-1).values
+        if t_log_probs.dim() == 3:
+            t_log_probs = F.log_softmax(t_log_probs, dim=-1).max(dim=-1).values
 
         loss, metrics_dict = compute_self_distillation_loss(
-            student_logits=student_logits,
-            teacher_top_k_log_probs=teacher_top_k_log_probs,
-            teacher_top_k_ids=teacher_top_k_ids,
-            mask=mask,
-            topk=topk,
-            temperature=temperature,
+            student_log_probs=s_log_probs,
+            teacher_log_probs=t_log_probs,
+            response_mask=mask,
+            alpha=alpha,
+            full_logit_distillation=full_logit_distillation,
+            is_clip=None,
+            student_all_log_probs=student_all_log_probs,
+            teacher_all_log_probs=teacher_all_log_probs,
         )
 
         return loss, metrics_dict

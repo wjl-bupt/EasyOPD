@@ -1,0 +1,11 @@
+{
+  "model_name": "SimCT_on_TeacherSFT",
+  "model_path": "/root/workspace/models/simct_on_teacher_sft",
+  "results": {
+    "gsm8k": {
+      "accuracy": 86.9598180439727,
+      "correct": 1147,
+      "total": 1319
+    }
+  }
+}

@@ -1,0 +1,123 @@
+{
+  "experiment_name": "EasyOPD Benchmark - RL Training Methods Comparison",
+  "date": "2026-06-06",
+  "framework": "verl (OpenRLHF-compatible)",
+  "status": "IN PROGRESS - rerunning Simple/SimCT with correct Phi-4-mini student",
+
+  "experiment_groups": {
+    "group_1_rl": {
+      "description": "Pure RL methods (GRPO) - no distillation",
+      "student": "Qwen2.5-1.5B-Instruct",
+      "student_path": "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/models/Qwen2.5-1.5B-Instruct",
+      "student_params": "1.5B",
+      "teacher": "None (self-play with reward only)"
+    },
+    "group_2_same_tokenizer_kd": {
+      "description": "Same-tokenizer distillation (GKD, SOD, etc.) - NOT YET IMPLEMENTED in benchmark",
+      "student": "Qwen2.5-1.5B-Instruct",
+      "student_path": "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/models/Qwen2.5-1.5B-Instruct",
+      "student_params": "1.5B",
+      "teacher": "Qwen2.5-7B-Instruct",
+      "teacher_path": "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/models/Qwen2.5-7B-Instruct",
+      "teacher_params": "7B",
+      "note": "Same tokenizer (Qwen2.5 family), teacher provides logits directly"
+    },
+    "group_3_cross_tokenizer_kd": {
+      "description": "Cross-tokenizer distillation (Simple, SimCT) - different tokenizers",
+      "student": "Phi-4-mini (SFT warmup checkpoint)",
+      "student_path": "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/KDFlow/output/ckpts/phi4-mini-sft-warmup-10k-qwen-lr2e-6/checkpoint-40",
+      "student_params": "3.8B",
+      "student_vocab_size": 200064,
+      "teacher": "Qwen2.5-7B-Instruct (via ref policy KL)",
+      "teacher_path": "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/models/Qwen2.5-7B-Instruct",
+      "teacher_params": "7B",
+      "teacher_vocab_size": 151936,
+      "note": "Different tokenizers! Student=Phi-4-mini, Teacher=Qwen2.5-7B. KL divergence computed between student policy and ref policy (initial student weights)."
+    }
+  },
+
+  "training_data": {
+    "dataset": "mixed_math_code_10k",
+    "source": "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/dataset/mixed_math_code_10k",
+    "train_samples": 9950,
+    "val_samples": 50,
+    "composition": {"math": 2209, "code": 7691},
+    "data_variants": {
+      "qwen_format": "experiments/benchmark/data/ (prompt as formatted string with Qwen2.5 chat template)",
+      "phi4mini_format": "experiments/benchmark/data_phi4mini/ (prompt as messages list, formatted by Phi-4-mini tokenizer at runtime)"
+    }
+  },
+
+  "evaluation_benchmarks": {
+    "MATH-500": {
+      "samples": 500,
+      "metric": "Accuracy (exact match via \\boxed{} extraction)",
+      "generation": {"max_tokens": 2048, "temperature": 0.0}
+    },
+    "GSM8K": {
+      "samples": 1319,
+      "metric": "Accuracy (exact match via #### extraction)",
+      "generation": {"max_tokens": 2048, "temperature": 0.0}
+    }
+  },
+
+  "common_training_config": {
+    "algorithm": "GRPO",
+    "total_training_steps": 200,
+    "train_batch_size": 16,
+    "max_prompt_length": 512,
+    "max_response_length": 1024,
+    "learning_rate": "1e-6",
+    "ppo_mini_batch_size": 16,
+    "entropy_coeff": 0.01,
+    "rollout_n": 8,
+    "rollout_temperature": 1.0,
+    "gradient_checkpointing": true,
+    "rollout_engine": "vLLM 0.8.5"
+  },
+
+  "hardware": {
+    "gpus": "8x NVIDIA H20 (96GB each)",
+    "distributed": "FSDP",
+    "rollout_engine": "vLLM 0.8.5 (enforce_eager=True)"
+  },
+
+  "methods": {
+    "Base_Qwen2.5-1.5B": {
+      "description": "Original Qwen2.5-1.5B-Instruct (SFT baseline for RL group)",
+      "model": "Qwen2.5-1.5B-Instruct",
+      "status": "DONE"
+    },
+    "Base_Phi4-mini": {
+      "description": "Phi-4-mini SFT warmup checkpoint (baseline for cross-tokenizer group)",
+      "model": "Phi-4-mini-sft-warmup",
+      "status": "TODO - need to evaluate"
+    },
+    "GRPO": {
+      "description": "Standard GRPO with math reward, no distillation",
+      "model": "Qwen2.5-1.5B-Instruct",
+      "status": "DONE"
+    },
+    "Simple": {
+      "description": "GRPO + reverse KL distillation (cross-tokenizer: Phi-4-mini student)",
+      "model": "Phi-4-mini (3.8B)",
+      "extra_config": {"policy_loss_mode": "simple", "use_kl_in_reward": true},
+      "status": "RUNNING - retraining with correct Phi-4-mini student"
+    },
+    "SimCT": {
+      "description": "GRPO + SimCT span-based KD (cross-tokenizer: Phi-4-mini student)",
+      "model": "Phi-4-mini (3.8B)",
+      "extra_config": {"policy_loss_mode": "simct", "use_kl_in_reward": true},
+      "status": "TODO - will run after Simple completes"
+    }
+  },
+
+  "results_summary": {
+    "Base_Qwen2.5-1.5B": {"MATH-500": 39.60, "GSM8K": 5.53},
+    "GRPO (Qwen2.5-1.5B)": {"MATH-500": 39.20, "GSM8K": 15.01},
+    "Simple (Phi-4-mini) [OLD - WRONG]": {"MATH-500": "INVALIDATED", "GSM8K": "INVALIDATED", "note": "Previously ran with wrong student model (Qwen2.5-1.5B instead of Phi-4-mini)"},
+    "SimCT (Phi-4-mini) [OLD - WRONG]": {"MATH-500": "INVALIDATED", "GSM8K": "INVALIDATED", "note": "Previously ran with wrong student model"},
+    "Simple (Phi-4-mini) [NEW]": {"MATH-500": "PENDING", "GSM8K": "PENDING"},
+    "SimCT (Phi-4-mini) [NEW]": {"MATH-500": "PENDING", "GSM8K": "PENDING"}
+  }
+}

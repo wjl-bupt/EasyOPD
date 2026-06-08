@@ -1,0 +1,13 @@
+# EasyOPD echo_kd demo method config.
+# Demonstrates the minimal yaml needed to enable a new method.
+easyopd:
+  method:
+    name: echo_kd
+
+# Data configuration (uses same format as other methods)
+data:
+  dataset: openai/gsm8k
+  dataset_split: train
+  val_split: test
+  prompt_template: math_qa
+  prompt_key: content

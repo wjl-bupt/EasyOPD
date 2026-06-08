@@ -63,11 +63,22 @@ class SODLossHook:
         delta = config.get("delta", 0.5) if isinstance(config, dict) else getattr(config, "delta", 0.5)
         advantages = kwargs.get("advantages")
 
+        # SOD expects per-token log-probs [batch, seq_len], not full logits [batch, seq_len, vocab]
+        # If 3D tensors are passed, reduce to 2D by taking max log-prob
+        s_logits = student_logits
+        t_logits = teacher_logits
+        if s_logits.dim() == 3:
+            import torch.nn.functional as F
+            s_logits = F.log_softmax(s_logits, dim=-1).max(dim=-1).values
+        if t_logits.dim() == 3:
+            import torch.nn.functional as F
+            t_logits = F.log_softmax(t_logits, dim=-1).max(dim=-1).values
+
         if advantages is None:
             # If no advantages provided, just compute weights for diagnostics
             weight_mask, step_info = compute_stepwise_opd_weights(
-                old_log_probs=student_logits,
-                ref_log_prob=teacher_logits,
+                old_log_probs=s_logits,
+                ref_log_prob=t_logits,
                 response_mask=mask,
                 epsilon=epsilon,
                 delta=delta,
@@ -82,8 +93,8 @@ class SODLossHook:
         # Apply step-wise OPD to advantages
         weighted_advantages, step_info = apply_stepwise_opd(
             advantages=advantages,
-            old_log_probs=student_logits,
-            ref_log_prob=teacher_logits,
+            old_log_probs=s_logits,
+            ref_log_prob=t_logits,
             response_mask=mask,
             epsilon=epsilon,
             delta=delta,

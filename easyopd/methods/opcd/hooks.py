@@ -59,15 +59,14 @@ class OPCDLossHook:
         """
         from easyopd.methods.opcd.core import compute_opcd_loss
 
-        kl_loss_type = config.get("kl_loss_type", "forward") if isinstance(config, dict) else getattr(config, "kl_loss_type", "forward")
+        kl_loss_type = config.get("kl_loss_type", "full") if isinstance(config, dict) else getattr(config, "kl_loss_type", "full")
         kl_topk = config.get("kl_topk", 0) if isinstance(config, dict) else getattr(config, "kl_topk", 0)
 
         loss, metrics_dict = compute_opcd_loss(
-            student_logits=student_logits,
-            teacher_logits=teacher_logits,
-            mask=mask,
+            student_log_probs=student_logits,
+            teacher_log_probs=teacher_logits,
+            response_mask=mask,
             kl_loss_type=kl_loss_type,
-            kl_topk=kl_topk,
         )
 
         return loss, metrics_dict

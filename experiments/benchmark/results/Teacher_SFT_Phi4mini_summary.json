@@ -1,0 +1,11 @@
+{
+  "model_name": "Teacher_SFT_Phi4mini",
+  "model_path": "/root/workspace/models/teacher_sft_phi4mini",
+  "results": {
+    "gsm8k": {
+      "accuracy": 85.97422289613344,
+      "correct": 1134,
+      "total": 1319
+    }
+  }
+}

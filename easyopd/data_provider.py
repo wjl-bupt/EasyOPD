@@ -61,6 +61,12 @@ _DEFAULT_CACHE_DIR = os.path.expanduser("~/.cache/easyopd/datasets")
 # Predefined dataset recipes: method -> recommended datasets
 # ---------------------------------------------------------------------------
 DATASET_RECIPES: dict[str, dict[str, Any]] = {
+    "echo_kd": {
+        "dataset": "openai/gsm8k",
+        "dataset_split": "train",
+        "prompt_template": "math_qa",
+        "description": "GSM8K for echo_kd demo distillation",
+    },
     "gkd": {
         "dataset": "openai/gsm8k",
         "dataset_split": "train",

@@ -130,7 +130,26 @@ class ROPDRewardHook:
         # at module import time.
         from easyopd.methods.ropd.reward_manager import ROPDRewardManager
 
-        self._reward_manager = ROPDRewardManager(config=config)
+        # ROPDRewardManager requires tokenizer, num_examine, compute_score
+        # which are only available in the full verl training context.
+        # Extract them from config if available.
+        tokenizer = config.get("tokenizer") if isinstance(config, dict) else getattr(config, "tokenizer", None)
+        num_examine = config.get("num_examine", 1) if isinstance(config, dict) else getattr(config, "num_examine", 1)
+        compute_score = config.get("compute_score") if isinstance(config, dict) else getattr(config, "compute_score", None)
+
+        if tokenizer is None:
+            raise RuntimeError(
+                "ROPDRewardHook requires 'tokenizer' in config to instantiate "
+                "the reward manager. This hook is designed to run inside the "
+                "full verl training pipeline."
+            )
+
+        self._reward_manager = ROPDRewardManager(
+            tokenizer=tokenizer,
+            num_examine=num_examine,
+            compute_score=compute_score,
+            ropd=config.get("ropd") if isinstance(config, dict) else getattr(config, "ropd", None),
+        )
         return self._reward_manager
 
     def compute_reward(

@@ -60,7 +60,7 @@ class GKDLossHook:
         loss, metrics_dict = gkd_loss(
             student_logits=student_logits,
             teacher_logits=teacher_logits,
-            mask=mask,
+            response_mask=mask,
             beta=beta,
             temperature=temperature,
         )

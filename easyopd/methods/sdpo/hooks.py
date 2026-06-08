@@ -56,15 +56,35 @@ class SDPOLossHook:
         """
         from easyopd.methods.sdpo.core import compute_sdpo_self_distillation_loss
 
-        kl_coef = config.get("kl_coef", 1.0) if isinstance(config, dict) else getattr(config, "kl_coef", 1.0)
-        temperature = config.get("temperature", 1.0) if isinstance(config, dict) else getattr(config, "temperature", 1.0)
+        alpha = config.get("alpha", 0.5) if isinstance(config, dict) else getattr(config, "alpha", 0.5)
+        full_logit_distillation = config.get("full_logit_distillation", True) if isinstance(config, dict) else getattr(config, "full_logit_distillation", True)
+
+        # full_logit_distillation requires student_all_log_probs and teacher_all_log_probs
+        # which are only available in the full pipeline. Fall back to non-full mode.
+        student_all_log_probs = kwargs.get("student_all_log_probs")
+        teacher_all_log_probs = kwargs.get("teacher_all_log_probs")
+        if full_logit_distillation and student_all_log_probs is None:
+            full_logit_distillation = False
+            alpha = 1.0  # non-full-logit mode requires reverse KL (alpha=1.0)
+
+        # SDPO expects per-token log-probs [batch, seq_len], not full logits [batch, seq_len, vocab]
+        import torch.nn.functional as F
+        s_log_probs = student_logits
+        t_log_probs = teacher_logits
+        if s_log_probs.dim() == 3:
+            s_log_probs = F.log_softmax(s_log_probs, dim=-1).max(dim=-1).values
+        if t_log_probs.dim() == 3:
+            t_log_probs = F.log_softmax(t_log_probs, dim=-1).max(dim=-1).values
 
         loss, metrics_dict = compute_sdpo_self_distillation_loss(
-            student_log_probs=student_logits,
-            teacher_log_probs=teacher_logits,
-            mask=mask,
-            kl_coef=kl_coef,
-            temperature=temperature,
+            student_log_probs=s_log_probs,
+            teacher_log_probs=t_log_probs,
+            response_mask=mask,
+            alpha=alpha,
+            full_logit_distillation=full_logit_distillation,
+            is_clip=None,
+            student_all_log_probs=student_all_log_probs,
+            teacher_all_log_probs=teacher_all_log_probs,
         )
 
         return loss, metrics_dict

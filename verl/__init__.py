@@ -20,6 +20,21 @@ from importlib.metadata import version as get_version
 
 from packaging.version import parse as parse_version
 
+# [EasyOPD] Compatibility patch: transformers 5.x removed `all_special_tokens_extended`
+# but vLLM 0.8.5 still uses it. Add it back as a property that returns `all_special_tokens`.
+# This must be applied early (before any vLLM tokenizer init) and in all processes.
+try:
+    import transformers as _tf
+    if not hasattr(_tf.PreTrainedTokenizerBase, 'all_special_tokens_extended'):
+        @property
+        def _all_special_tokens_extended(self):
+            return self.all_special_tokens
+        _tf.PreTrainedTokenizerBase.all_special_tokens_extended = _all_special_tokens_extended
+        del _all_special_tokens_extended
+    del _tf
+except ImportError:
+    pass
+
 from .protocol import DataProto
 from .utils.device import is_npu_available
 from .utils.logging_utils import set_basic_config

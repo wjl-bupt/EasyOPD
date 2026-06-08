@@ -276,7 +276,7 @@ def get_system_info() -> dict[str, Any]:
             info["cuda_version"] = torch.version.cuda
             info["gpu_name"] = torch.cuda.get_device_name(0)
             info["gpu_count"] = torch.cuda.device_count()
-            info["gpu_memory_total_mb"] = torch.cuda.get_device_properties(0).total_mem / (1024 * 1024)
+            info["gpu_memory_total_mb"] = torch.cuda.get_device_properties(0).total_memory / (1024 * 1024)
     except ImportError:
         info["torch_version"] = "not installed"
 

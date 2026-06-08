@@ -1,0 +1,333 @@
+"""Evaluate a trained model on MATH-500 and GSM8K benchmarks.
+
+Supports data-parallel evaluation: launches multiple vLLM instances (one per GPU)
+each processing a shard of the data, then merges results.
+
+Usage:
+    python evaluate_model.py --model_path <path> --output_dir <dir> [--benchmarks math500,gsm8k] [--dp_size 8]
+"""
+
+import argparse
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+# Disable vLLM V1 engine to avoid CUDA fork issues
+os.environ["VLLM_USE_V1"] = "0"
+os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+
+import multiprocessing
+multiprocessing.set_start_method("spawn", force=True)
+
+import pandas as pd
+
+# Add project root to path
+sys.path.insert(0, "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD")
+
+from verl.utils.reward_score.math import compute_score as math_compute_score
+from verl.utils.reward_score.gsm8k import compute_score as gsm8k_compute_score
+
+
+DATA_DIR = "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/benchmark/data"
+RESULTS_DIR = "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/benchmark/results"
+
+
+def evaluate_with_vllm(model_path: str, eval_data_path: str, benchmark_name: str,
+                       max_tokens: int = 2048, temperature: float = 0.0,
+                       tensor_parallel_size: int = 1, dp_size: int = 8):
+    """Generate responses using vLLM with data parallelism.
+    Launches dp_size subprocesses, each on a different GPU, processing a shard of data.
+    """
+    import subprocess
+    import tempfile
+
+    # Create the worker script that each GPU will run
+    eval_script = '''
+import os, sys, json, time
+os.environ["VLLM_USE_V1"] = "0"
+os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+sys.path.insert(0, "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD")
+
+import pandas as pd
+from vllm import LLM, SamplingParams
+from verl.utils.reward_score.math import compute_score as math_compute_score
+from verl.utils.reward_score.gsm8k import compute_score as gsm8k_compute_score
+
+# Read config from command line args
+config_file = sys.argv[1]
+output_file = sys.argv[2]
+
+with open(config_file) as f:
+    config = json.load(f)
+
+model_path = config["model_path"]
+eval_data_path = config["eval_data_path"]
+benchmark_name = config["benchmark_name"]
+max_tokens = config["max_tokens"]
+temperature = config["temperature"]
+tensor_parallel_size = config["tensor_parallel_size"]
+shard_indices = config["shard_indices"]
+gpu_id = config["gpu_id"]
+
+# Set CUDA visible device
+os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+
+df = pd.read_parquet(eval_data_path)
+prompts = df["prompt"].tolist()
+reward_model_data = df["reward_model"].tolist()
+
+# Select only this shard's data
+shard_prompts = [prompts[i] for i in shard_indices]
+shard_reward_data = [reward_model_data[i] for i in shard_indices]
+print(f"[GPU {gpu_id}] Processing {len(shard_prompts)} samples (shard of {len(prompts)} total)")
+
+llm = LLM(
+    model=model_path,
+    tensor_parallel_size=tensor_parallel_size,
+    trust_remote_code=True,
+    max_model_len=4096,
+    gpu_memory_utilization=0.85,
+    enforce_eager=True,
+)
+
+sampling_params = SamplingParams(temperature=temperature, max_tokens=max_tokens, top_p=1.0)
+print(f"[GPU {gpu_id}] Generating responses...")
+start_time = time.time()
+outputs = llm.generate(shard_prompts, sampling_params)
+gen_time = time.time() - start_time
+print(f"[GPU {gpu_id}] Generation completed in {gen_time:.1f}s ({len(shard_prompts)/gen_time:.1f} samples/s)")
+
+correct = 0
+total = len(outputs)
+results = []
+for i, output in enumerate(outputs):
+    response = output.outputs[0].text
+    ground_truth = shard_reward_data[i]["ground_truth"]
+    if benchmark_name in ("math500", "math_hard"):
+        score = math_compute_score(response, ground_truth)
+    elif benchmark_name == "gsm8k":
+        score = gsm8k_compute_score(response, ground_truth)
+    else:
+        score = 0.0
+    correct += score
+    results.append({"index": shard_indices[i], "prompt": shard_prompts[i][:200], "response": response[:500], "ground_truth": ground_truth, "score": score})
+
+accuracy = correct / total * 100 if total > 0 else 0.0
+print(f"[GPU {gpu_id}] Shard accuracy: {accuracy:.2f}% ({int(correct)}/{total})")
+
+output_data = {"gpu_id": gpu_id, "accuracy": accuracy, "correct": int(correct), "total": total, "gen_time_s": gen_time, "results": results}
+with open(output_file, "w") as f:
+    json.dump(output_data, f, ensure_ascii=False)
+'''
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, dir='/tmp') as f:
+        f.write(eval_script)
+        script_path = f.name
+
+    print(f"\n{'='*60}")
+    print(f"Evaluating: {model_path}")
+    print(f"Benchmark: {benchmark_name}")
+    print(f"Data Parallel: {dp_size} GPUs, Tensor Parallel: {tensor_parallel_size}")
+    print(f"{'='*60}")
+
+    # Load data to determine total samples and create shards
+    df = pd.read_parquet(eval_data_path)
+    total_samples = len(df)
+    
+    # Split indices into dp_size shards
+    all_indices = list(range(total_samples))
+    shards = []
+    shard_size = (total_samples + dp_size - 1) // dp_size
+    for i in range(dp_size):
+        start = i * shard_size
+        end = min(start + shard_size, total_samples)
+        if start < total_samples:
+            shards.append(all_indices[start:end])
+
+    actual_dp_size = len(shards)
+    print(f"Total samples: {total_samples}, split into {actual_dp_size} shards")
+
+    # Launch subprocesses for each GPU
+    processes = []
+    config_files = []
+    output_files = []
+
+    for gpu_idx in range(actual_dp_size):
+        # Write config for this shard
+        config_data = {
+            "model_path": model_path,
+            "eval_data_path": eval_data_path,
+            "benchmark_name": benchmark_name,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "tensor_parallel_size": tensor_parallel_size,
+            "shard_indices": shards[gpu_idx],
+            "gpu_id": gpu_idx,
+        }
+        config_path = f"/tmp/eval_config_{benchmark_name}_{os.getpid()}_{gpu_idx}.json"
+        with open(config_path, "w") as f:
+            json.dump(config_data, f)
+        config_files.append(config_path)
+
+        output_path = f"/tmp/eval_result_{benchmark_name}_{os.getpid()}_{gpu_idx}.json"
+        output_files.append(output_path)
+
+        env = os.environ.copy()
+        env["VLLM_USE_V1"] = "0"
+        env["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+        env["CUDA_VISIBLE_DEVICES"] = str(gpu_idx)
+
+        proc = subprocess.Popen(
+            [sys.executable, script_path, config_path, output_path],
+            env=env,
+        )
+        processes.append(proc)
+        print(f"  Launched worker on GPU {gpu_idx} ({len(shards[gpu_idx])} samples)")
+
+    # Wait for all processes to complete
+    print(f"\nWaiting for {actual_dp_size} workers to complete...")
+    start_time = time.time()
+    for proc in processes:
+        proc.wait()
+    total_time = time.time() - start_time
+    print(f"All workers completed in {total_time:.1f}s")
+
+    # Cleanup script
+    os.unlink(script_path)
+
+    # Merge results from all shards
+    all_correct = 0
+    all_total = 0
+    all_results = []
+    all_gen_time = 0
+    failed_gpus = []
+
+    for gpu_idx in range(actual_dp_size):
+        # Cleanup config file
+        if os.path.exists(config_files[gpu_idx]):
+            os.unlink(config_files[gpu_idx])
+
+        if processes[gpu_idx].returncode != 0:
+            print(f"  WARNING: GPU {gpu_idx} worker failed (exit code {processes[gpu_idx].returncode})")
+            failed_gpus.append(gpu_idx)
+            continue
+
+        if not os.path.exists(output_files[gpu_idx]):
+            print(f"  WARNING: GPU {gpu_idx} output file not found")
+            failed_gpus.append(gpu_idx)
+            continue
+
+        with open(output_files[gpu_idx]) as f:
+            shard_result = json.load(f)
+        os.unlink(output_files[gpu_idx])
+
+        all_correct += shard_result["correct"]
+        all_total += shard_result["total"]
+        all_results.extend(shard_result["results"])
+        all_gen_time = max(all_gen_time, shard_result["gen_time_s"])
+
+    if failed_gpus:
+        print(f"  WARNING: {len(failed_gpus)} GPU(s) failed: {failed_gpus}")
+
+    # Sort results by original index
+    all_results.sort(key=lambda x: x["index"])
+
+    accuracy = all_correct / all_total * 100 if all_total > 0 else 0.0
+
+    print(f"\n{'='*60}")
+    print(f"Results for {benchmark_name}:")
+    print(f"  Accuracy: {accuracy:.2f}% ({all_correct}/{all_total})")
+    print(f"  Wall time: {total_time:.1f}s (max gen time per GPU: {all_gen_time:.1f}s)")
+    if failed_gpus:
+        print(f"  WARNING: Results incomplete due to {len(failed_gpus)} failed worker(s)")
+    print(f"{'='*60}")
+
+    return {
+        "model_path": model_path,
+        "benchmark": benchmark_name,
+        "accuracy": accuracy,
+        "correct": all_correct,
+        "total": all_total,
+        "gen_time_s": all_gen_time,
+        "wall_time_s": total_time,
+        "dp_size": actual_dp_size,
+        "failed_gpus": failed_gpus,
+        "results": all_results,
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Evaluate model on benchmarks")
+    parser.add_argument("--model_path", type=str, required=True, help="Path to model checkpoint")
+    parser.add_argument("--model_name", type=str, default=None, help="Name for this model in results")
+    parser.add_argument("--output_dir", type=str, default=RESULTS_DIR, help="Output directory")
+    parser.add_argument("--benchmarks", type=str, default="math500,gsm8k", help="Comma-separated benchmarks")
+    parser.add_argument("--max_tokens", type=int, default=2048, help="Max generation tokens")
+    parser.add_argument("--tensor_parallel_size", type=int, default=1, help="TP size for each vLLM instance")
+    parser.add_argument("--dp_size", type=int, default=8, help="Data parallel size (number of GPUs)")
+    args = parser.parse_args()
+
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    model_name = args.model_name or Path(args.model_path).name
+    benchmarks = args.benchmarks.split(",")
+
+    all_results = {}
+
+    for bench in benchmarks:
+        bench = bench.strip()
+        if bench == "math500":
+            eval_path = os.path.join(DATA_DIR, "math500_eval.parquet")
+        elif bench == "gsm8k":
+            eval_path = os.path.join(DATA_DIR, "gsm8k_eval.parquet")
+        elif bench == "math_hard":
+            eval_path = os.path.join(DATA_DIR, "math_hard_eval.parquet")
+        else:
+            print(f"Unknown benchmark: {bench}, skipping")
+            continue
+
+        if not os.path.exists(eval_path):
+            print(f"Eval data not found: {eval_path}, skipping")
+            continue
+
+        result = evaluate_with_vllm(
+            model_path=args.model_path,
+            eval_data_path=eval_path,
+            benchmark_name=bench,
+            max_tokens=args.max_tokens,
+            tensor_parallel_size=args.tensor_parallel_size,
+            dp_size=args.dp_size,
+        )
+        all_results[bench] = {
+            "accuracy": result["accuracy"],
+            "correct": result["correct"],
+            "total": result["total"],
+        }
+
+        # Save detailed results
+        detail_path = os.path.join(args.output_dir, f"{model_name}_{bench}_details.json")
+        with open(detail_path, "w") as f:
+            json.dump(result, f, indent=2, ensure_ascii=False)
+
+    # Save summary
+    summary = {
+        "model_name": model_name,
+        "model_path": args.model_path,
+        "results": all_results,
+    }
+    summary_path = os.path.join(args.output_dir, f"{model_name}_summary.json")
+    with open(summary_path, "w") as f:
+        json.dump(summary, f, indent=2)
+
+    print(f"\n{'='*60}")
+    print(f"SUMMARY: {model_name}")
+    print(f"{'='*60}")
+    for bench, res in all_results.items():
+        print(f"  {bench}: {res['accuracy']:.2f}% ({res['correct']}/{res['total']})")
+    print(f"\nResults saved to: {args.output_dir}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,6 @@
+method,model,math500_accuracy,gsm8k_accuracy,math500_correct,math500_total,gsm8k_correct,gsm8k_total
+SFT (Baseline),Qwen2.5-1.5B-Instruct,39.60,5.53,198,500,73,1319
+GRPO,Qwen2.5-1.5B-Instruct,39.20,15.01,196,500,198,1319
+SFT (Baseline),Phi-4-mini,56.00,83.55,280,500,1102,1319
+Simple (Ours),Phi-4-mini,53.40,84.08,267,500,1109,1319
+SimCT (Ours),Phi-4-mini,54.40,83.55,272,500,1102,1319

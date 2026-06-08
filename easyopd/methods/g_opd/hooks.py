@@ -56,27 +56,40 @@ class GOPDLossHook:
         """
         from easyopd.methods.g_opd.core import compute_g_opd_advantages
 
-        rewards = kwargs.get("rewards")
         old_log_probs = kwargs.get("old_log_probs", student_logits)
         ref_log_probs = kwargs.get("ref_log_probs", teacher_logits)
+        base_log_probs = kwargs.get("base_log_probs", old_log_probs)
 
-        reward_scale = config.get("reward_scale", 1.0) if isinstance(config, dict) else getattr(config, "reward_scale", 1.0)
+        # G-OPD expects per-token log-probs [batch, seq_len], not full logits [batch, seq_len, vocab]
+        # If 3D tensors are passed, reduce to 2D by taking max log-prob
+        import torch.nn.functional as F
+        if old_log_probs.dim() == 3:
+            old_log_probs = F.log_softmax(old_log_probs, dim=-1).max(dim=-1).values
+        if ref_log_probs.dim() == 3:
+            ref_log_probs = F.log_softmax(ref_log_probs, dim=-1).max(dim=-1).values
+        if base_log_probs.dim() == 3:
+            base_log_probs = F.log_softmax(base_log_probs, dim=-1).max(dim=-1).values
+
+        s_log_probs = student_logits
+        if s_log_probs.dim() == 3:
+            s_log_probs = F.log_softmax(s_log_probs, dim=-1).max(dim=-1).values
+
+        lambda_vals = config.get("lambda_vals", 1.0) if isinstance(config, dict) else getattr(config, "lambda_vals", 1.0)
 
         advantages = compute_g_opd_advantages(
-            rewards=rewards,
             old_log_probs=old_log_probs,
-            ref_log_probs=ref_log_probs,
-            response_mask=mask,
-            reward_scale=reward_scale,
+            ref_log_prob=ref_log_probs,
+            base_log_prob=base_log_probs,
+            lambda_vals=lambda_vals,
         )
 
         # Compute policy gradient loss with G-OPD advantages
-        ratio = torch.exp(student_logits - old_log_probs)
+        ratio = torch.exp(s_log_probs - old_log_probs)
         loss = -(ratio * advantages * mask).sum() / mask.sum().clamp(min=1)
 
         metrics = {
             "g_opd/mean_advantage": advantages[mask.bool()].mean().item() if mask.any() else 0.0,
-            "g_opd/reward_scale": reward_scale,
+            "g_opd/lambda_vals": lambda_vals,
         }
 
         return loss, metrics

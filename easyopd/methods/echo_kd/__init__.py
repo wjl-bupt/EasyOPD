@@ -23,3 +23,5 @@ class EchoKDMethod:
 
     name = "echo_kd"
     description = "Echo-KD: minimal MSE distillation demo."
+    paper_url = ""
+    verl_modified_files = []

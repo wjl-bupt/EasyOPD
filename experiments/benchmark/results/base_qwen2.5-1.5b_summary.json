@@ -1,0 +1,16 @@
+{
+  "model_name": "base_qwen2.5-1.5b",
+  "model_path": "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/models/Qwen2.5-1.5B-Instruct",
+  "results": {
+    "math500": {
+      "accuracy": 39.6,
+      "correct": 198,
+      "total": 500
+    },
+    "gsm8k": {
+      "accuracy": 5.534495830174375,
+      "correct": 73,
+      "total": 1319
+    }
+  }
+}

@@ -543,6 +543,10 @@ class DataParallelPPOActor(BasePPOActor):
         if self.config.policy_loss.only_reverse_kl_advantages and "ref_log_prob" in data.batch.keys():
             if "ref_log_prob" not in select_keys:
                 select_keys.append("ref_log_prob")
+        # [EasyOPD:Simple] Also include ref_log_prob for simple KD loss
+        if self.config.policy_loss.get("loss_mode", "vanilla") in ("simple", "simct") and "ref_log_prob" in data.batch.keys():
+            if "ref_log_prob" not in select_keys:
+                select_keys.append("ref_log_prob")
         if "base_log_prob" in data.batch.keys():
             select_keys.append("base_log_prob")
         if "base_ref_log_prob" in data.batch.keys():
@@ -1019,6 +1023,58 @@ class DataParallelPPOActor(BasePPOActor):
                         append_to_dict(metrics, opsa_metrics)
                         continue
                     # ============ [EasyOPD:OPSA] End ============
+
+                    # ============ [EasyOPD:Simple/SimCT] Cross-tokenizer KD loss ============
+                    if loss_mode in ("simple", "simct"):
+                        # Simple KD: use ref_log_prob as teacher signal and compute
+                        # reverse KL divergence at the token level.
+                        # When a dedicated teacher is available via distillation config,
+                        # its logprobs are stored in ref_log_prob by the trainer loop.
+                        teacher_lp = model_inputs.get("ref_log_prob")
+                        if teacher_lp is None:
+                            # Fallback: treat old_log_prob as teacher
+                            teacher_lp = old_log_prob
+
+                        # Reverse KL: E_student[log(student/teacher)]
+                        # = sum_t student_logp(t) - teacher_logp(t)
+                        kl_per_token = (log_prob - teacher_lp) * response_mask
+
+                        # Forward KL: E_teacher[log(teacher/student)]
+                        # = sum_t teacher_logp(t) - student_logp(t)
+                        # Use configurable direction
+                        simple_kl_direction = self.config.policy_loss.get(
+                            "simple_kl_direction", "reverse"
+                        )
+                        if simple_kl_direction == "forward":
+                            # Forward KL: teacher * (teacher - student)
+                            # With only per-token logprobs, approximate as:
+                            # -(teacher_lp - log_prob) weighted by exp(teacher_lp)
+                            kl_per_token = (teacher_lp.exp() * (teacher_lp - log_prob)) * response_mask
+                        else:
+                            # Reverse KL: student * (student - teacher)
+                            kl_per_token = (log_prob.exp() * (log_prob - teacher_lp)) * response_mask
+
+                        # Clamp to avoid extreme values
+                        simple_loss_clamp = self.config.policy_loss.get("simple_loss_clamp", 10.0)
+                        kl_per_token = kl_per_token.clamp(min=0.0, max=simple_loss_clamp)
+
+                        policy_loss = agg_loss(
+                            loss_mat=kl_per_token, loss_mask=response_mask, loss_agg_mode=loss_agg_mode
+                        )
+
+                        if self.config.use_dynamic_bsz:
+                            loss = policy_loss * loss_scale_factor
+                        else:
+                            loss = policy_loss * loss_scale_factor
+                        loss.backward()
+
+                        simple_metrics = {
+                            f"{loss_mode}/kl_loss": policy_loss.detach().item() * loss_scale_factor,
+                            f"{loss_mode}/kl_per_token_mean": kl_per_token.sum().item() / response_mask.sum().clamp(min=1).item(),
+                        }
+                        append_to_dict(metrics, simple_metrics)
+                        continue
+                    # ============ [EasyOPD:Simple] End ============
 
                     policy_loss_fn = get_policy_loss_fn(loss_mode)
                     pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = policy_loss_fn(

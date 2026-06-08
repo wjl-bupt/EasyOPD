@@ -131,6 +131,10 @@ class PolicyLossConfig(BaseConfig):
     lambda_vals: float = 1.0
     multi_teacher_distill: bool = False
     # ============ [EasyOPD] End ============
+    # ============ [EasyOPD:Simple] Cross-tokenizer KD parameters ============
+    simple_kl_direction: str = "reverse"  # 'forward' or 'reverse'
+    simple_loss_clamp: float = 10.0  # Max clamp value for per-token KL
+    # ============ [EasyOPD:Simple] End ============
 
 
 @dataclass

@@ -18,6 +18,15 @@ Note that we don't combine the main with ray_trainer as ray_trainer is used by o
 import os
 import socket
 
+# [EasyOPD] Compatibility patch: transformers 5.x removed `all_special_tokens_extended`
+# but vLLM 0.8.5 still uses it. Add it back as a property that returns `all_special_tokens`.
+import transformers
+if not hasattr(transformers.PreTrainedTokenizerBase, 'all_special_tokens_extended'):
+    @property
+    def _all_special_tokens_extended(self):
+        return self.all_special_tokens
+    transformers.PreTrainedTokenizerBase.all_special_tokens_extended = _all_special_tokens_extended
+
 import hydra
 import ray
 from omegaconf import OmegaConf

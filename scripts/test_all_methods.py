@@ -74,7 +74,7 @@ def run_test(name: str, test_fn) -> TestResult:
 # Tests
 # ---------------------------------------------------------------------------
 
-EXPECTED_METHODS = ["g_opd", "gad", "gkd", "lightning_opd", "opcd", "opsa", "ropd", "sdpo", "simct", "simple", "sod", "vision_opd"]
+EXPECTED_METHODS = ["echo_kd", "g_opd", "gad", "gkd", "lightning_opd", "opcd", "opsa", "ropd", "sdpo", "simct", "simple", "sod", "vision_opd"]
 
 # Methods that integrate with verl outside the actor-side HookDispatcher and
 # therefore legitimately have no actor LossHook / RolloutHook / RewardHook /
@@ -228,6 +228,7 @@ def test_method_hook_coverage():
 
     # Expected hooks per method (based on paper design)
     expected_hooks = {
+        "echo_kd": {"loss"},
         "gkd": {"loss"},
         "sod": {"loss", "rollout"},
         "opcd": {"loss", "rollout"},
