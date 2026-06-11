@@ -30,8 +30,10 @@ from verl.utils.reward_score.math import compute_score as math_compute_score
 from verl.utils.reward_score.gsm8k import compute_score as gsm8k_compute_score
 
 
-DATA_DIR = "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/benchmark/data"
-RESULTS_DIR = "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/benchmark/results"
+# Default eval-data dir is shared across all methods/experiments.
+# Eval results are method-specific and MUST be passed in via --output_dir
+# (typically <experiment>/methods/<method>/results/).
+DATA_DIR = "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/_shared/eval_data"
 
 
 def evaluate_with_vllm(model_path: str, eval_data_path: str, benchmark_name: str,
@@ -58,6 +60,7 @@ from verl.utils.reward_score.gsm8k import compute_score as gsm8k_compute_score
 # Read config from command line args
 config_file = sys.argv[1]
 output_file = sys.argv[2]
+progress_file = sys.argv[3]
 
 with open(config_file) as f:
     config = json.load(f)
@@ -71,6 +74,11 @@ tensor_parallel_size = config["tensor_parallel_size"]
 shard_indices = config["shard_indices"]
 gpu_id = config["gpu_id"]
 
+def report_progress(stage, done=0, total=0):
+    """Write progress to file for the main process to read."""
+    with open(progress_file, "w") as pf:
+        json.dump({"gpu_id": gpu_id, "stage": stage, "done": done, "total": total, "time": time.time()}, pf)
+
 # Set CUDA visible device
 os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 
@@ -81,7 +89,9 @@ reward_model_data = df["reward_model"].tolist()
 # Select only this shard's data
 shard_prompts = [prompts[i] for i in shard_indices]
 shard_reward_data = [reward_model_data[i] for i in shard_indices]
-print(f"[GPU {gpu_id}] Processing {len(shard_prompts)} samples (shard of {len(prompts)} total)")
+print(f"[GPU {gpu_id}] Processing {len(shard_prompts)} samples (shard of {len(prompts)} total)", flush=True)
+
+report_progress("loading_model", 0, len(shard_prompts))
 
 llm = LLM(
     model=model_path,
@@ -92,12 +102,16 @@ llm = LLM(
     enforce_eager=True,
 )
 
+report_progress("generating", 0, len(shard_prompts))
+
 sampling_params = SamplingParams(temperature=temperature, max_tokens=max_tokens, top_p=1.0)
-print(f"[GPU {gpu_id}] Generating responses...")
+print(f"[GPU {gpu_id}] Generating responses...", flush=True)
 start_time = time.time()
 outputs = llm.generate(shard_prompts, sampling_params)
 gen_time = time.time() - start_time
-print(f"[GPU {gpu_id}] Generation completed in {gen_time:.1f}s ({len(shard_prompts)/gen_time:.1f} samples/s)")
+print(f"[GPU {gpu_id}] Generation completed in {gen_time:.1f}s ({len(shard_prompts)/gen_time:.1f} samples/s)", flush=True)
+
+report_progress("scoring", len(shard_prompts), len(shard_prompts))
 
 correct = 0
 total = len(outputs)
@@ -115,7 +129,9 @@ for i, output in enumerate(outputs):
     results.append({"index": shard_indices[i], "prompt": shard_prompts[i][:200], "response": response[:500], "ground_truth": ground_truth, "score": score})
 
 accuracy = correct / total * 100 if total > 0 else 0.0
-print(f"[GPU {gpu_id}] Shard accuracy: {accuracy:.2f}% ({int(correct)}/{total})")
+print(f"[GPU {gpu_id}] Shard accuracy: {accuracy:.2f}% ({int(correct)}/{total})", flush=True)
+
+report_progress("done", total, total)
 
 output_data = {"gpu_id": gpu_id, "accuracy": accuracy, "correct": int(correct), "total": total, "gen_time_s": gen_time, "results": results}
 with open(output_file, "w") as f:
@@ -174,25 +190,75 @@ with open(output_file, "w") as f:
         output_path = f"/tmp/eval_result_{benchmark_name}_{os.getpid()}_{gpu_idx}.json"
         output_files.append(output_path)
 
+        progress_path = f"/tmp/eval_progress_{benchmark_name}_{os.getpid()}_{gpu_idx}.json"
+
         env = os.environ.copy()
         env["VLLM_USE_V1"] = "0"
         env["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
         env["CUDA_VISIBLE_DEVICES"] = str(gpu_idx)
 
         proc = subprocess.Popen(
-            [sys.executable, script_path, config_path, output_path],
+            [sys.executable, script_path, config_path, output_path, progress_path],
             env=env,
         )
         processes.append(proc)
         print(f"  Launched worker on GPU {gpu_idx} ({len(shards[gpu_idx])} samples)")
 
-    # Wait for all processes to complete
+    # Wait for all processes to complete with progress bar
+    from tqdm import tqdm
     print(f"\nWaiting for {actual_dp_size} workers to complete...")
     start_time = time.time()
-    for proc in processes:
-        proc.wait()
+
+    progress_files = [f"/tmp/eval_progress_{benchmark_name}_{os.getpid()}_{i}.json" for i in range(actual_dp_size)]
+    pbar = tqdm(total=total_samples, desc=f"Eval {benchmark_name}", unit="sample")
+    last_total_done = 0
+    model_loaded = [False] * actual_dp_size
+
+    while True:
+        # Check if all processes are done
+        all_done = all(proc.poll() is not None for proc in processes)
+
+        # Read progress from each worker
+        total_done = 0
+        stages = []
+        for i in range(actual_dp_size):
+            try:
+                with open(progress_files[i]) as pf:
+                    prog = json.load(pf)
+                    total_done += prog["done"]
+                    stages.append(prog["stage"])
+                    if prog["stage"] != "loading_model":
+                        model_loaded[i] = True
+            except (FileNotFoundError, json.JSONDecodeError):
+                stages.append("starting")
+
+        # Update progress bar
+        delta = total_done - last_total_done
+        if delta > 0:
+            pbar.update(delta)
+            last_total_done = total_done
+
+        # Update description with stage info
+        loading_count = stages.count("loading_model") + stages.count("starting")
+        generating_count = stages.count("generating")
+        done_count = stages.count("done") + stages.count("scoring")
+        pbar.set_postfix_str(f"loading:{loading_count} gen:{generating_count} done:{done_count}")
+
+        if all_done:
+            # Final update
+            pbar.update(total_samples - last_total_done)
+            break
+
+        time.sleep(1)
+
+    pbar.close()
     total_time = time.time() - start_time
     print(f"All workers completed in {total_time:.1f}s")
+
+    # Cleanup progress files
+    for pf in progress_files:
+        if os.path.exists(pf):
+            os.unlink(pf)
 
     # Cleanup script
     os.unlink(script_path)
@@ -262,7 +328,11 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate model on benchmarks")
     parser.add_argument("--model_path", type=str, required=True, help="Path to model checkpoint")
     parser.add_argument("--model_name", type=str, default=None, help="Name for this model in results")
-    parser.add_argument("--output_dir", type=str, default=RESULTS_DIR, help="Output directory")
+    parser.add_argument("--output_dir", type=str, required=True,
+                        help="Where to dump <model>_<bench>_details.json and <model>_summary.json. "
+                             "Typically <experiment>/methods/<method>/results/")
+    parser.add_argument("--data_dir", type=str, default=DATA_DIR,
+                        help=f"Directory containing *_eval.parquet files (default: {DATA_DIR})")
     parser.add_argument("--benchmarks", type=str, default="math500,gsm8k", help="Comma-separated benchmarks")
     parser.add_argument("--max_tokens", type=int, default=2048, help="Max generation tokens")
     parser.add_argument("--tensor_parallel_size", type=int, default=1, help="TP size for each vLLM instance")
@@ -279,11 +349,11 @@ def main():
     for bench in benchmarks:
         bench = bench.strip()
         if bench == "math500":
-            eval_path = os.path.join(DATA_DIR, "math500_eval.parquet")
+            eval_path = os.path.join(args.data_dir, "math500_eval.parquet")
         elif bench == "gsm8k":
-            eval_path = os.path.join(DATA_DIR, "gsm8k_eval.parquet")
+            eval_path = os.path.join(args.data_dir, "gsm8k_eval.parquet")
         elif bench == "math_hard":
-            eval_path = os.path.join(DATA_DIR, "math_hard_eval.parquet")
+            eval_path = os.path.join(args.data_dir, "math_hard_eval.parquet")
         else:
             print(f"Unknown benchmark: {bench}, skipping")
             continue

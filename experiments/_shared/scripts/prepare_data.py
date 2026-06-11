@@ -14,10 +14,15 @@ from pathlib import Path
 
 # Paths
 DATASET_ROOT = "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/dataset"
-OUTPUT_DIR = "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/benchmark/data"
+# Eval data is shared across all methods (math500/gsm8k/math_hard etc.)
+EVAL_DATA_DIR = "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/_shared/eval_data"
+# Training data is method-specific; this is just a fallback dump location for
+# the legacy train/val/sft_train parquet (no longer used by the new SFT pipeline,
+# kept for backward compatibility of older scripts).
+TRAIN_DATA_DIR = EVAL_DATA_DIR  # same dir is fine; train.parquet & val.parquet just live alongside
 MODEL_PATH = "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/models/Qwen2.5-1.5B-Instruct"
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(EVAL_DATA_DIR, exist_ok=True)
 
 
 def prepare_training_data():
@@ -62,8 +67,8 @@ def prepare_training_data():
     train_df = pd.DataFrame(train_records)
     val_df = pd.DataFrame(val_records)
 
-    train_path = os.path.join(OUTPUT_DIR, "train.parquet")
-    val_path = os.path.join(OUTPUT_DIR, "val.parquet")
+    train_path = os.path.join(TRAIN_DATA_DIR, "train.parquet")
+    val_path = os.path.join(TRAIN_DATA_DIR, "val.parquet")
 
     train_df.to_parquet(train_path)
     val_df.to_parquet(val_path)
@@ -107,12 +112,12 @@ def prepare_math500_eval():
     df = pd.DataFrame(records)
     # Take first 500 for MATH-500 benchmark
     df_500 = df.head(500)
-    out_path = os.path.join(OUTPUT_DIR, "math500_eval.parquet")
+    out_path = os.path.join(EVAL_DATA_DIR, "math500_eval.parquet")
     df_500.to_parquet(out_path)
     print(f"MATH-500 eval: {len(df_500)} samples -> {out_path}")
 
     # Also save full MATH-Hard
-    out_path_full = os.path.join(OUTPUT_DIR, "math_hard_eval.parquet")
+    out_path_full = os.path.join(EVAL_DATA_DIR, "math_hard_eval.parquet")
     df.to_parquet(out_path_full)
     print(f"MATH-Hard eval: {len(df)} samples -> {out_path_full}")
 
@@ -157,7 +162,7 @@ def prepare_gsm8k_eval():
         })
 
     df = pd.DataFrame(records)
-    out_path = os.path.join(OUTPUT_DIR, "gsm8k_eval.parquet")
+    out_path = os.path.join(EVAL_DATA_DIR, "gsm8k_eval.parquet")
     df.to_parquet(out_path)
     print(f"GSM8K eval: {len(df)} samples -> {out_path}")
 
@@ -209,7 +214,7 @@ def prepare_sft_data():
             })
 
     df = pd.DataFrame(records)
-    out_path = os.path.join(OUTPUT_DIR, "sft_train.parquet")
+    out_path = os.path.join(TRAIN_DATA_DIR, "sft_train.parquet")
     df.to_parquet(out_path)
     print(f"SFT training data: {len(df)} samples -> {out_path}")
 

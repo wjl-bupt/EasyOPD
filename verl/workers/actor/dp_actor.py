@@ -134,8 +134,16 @@ class DataParallelPPOActor(BasePPOActor):
         treat the absence of these keys as "use per-token mixed KL fallback".
         """
         opsa_caller_requested_extra = (opsa_topk_k is not None) or (opsa_gather_indices is not None)
+        simple_xtok_requested = (
+            self.config.policy_loss.get("loss_mode", "vanilla") in ("simple", "simct")
+            and "teacher_hidden_states" in micro_batch
+            and "teacher_input_ids" in micro_batch
+            and "teacher_loss_mask" in micro_batch
+        )
+        extra_caller_requested = opsa_caller_requested_extra or simple_xtok_requested
         opsa_extra_requested = opsa_caller_requested_extra
         opsa_extra: dict = {}
+        simple_xtok_loss = None
         # OPSA top-K extraction is currently disabled under ulysses SP (rmpad+SP layout makes
         # the gather/topk extraction non-trivial). Caller should use per-token mixed KL.
         # We still honour the caller's 3-tuple return contract — just hand back an empty dict.
@@ -149,6 +157,12 @@ class DataParallelPPOActor(BasePPOActor):
             opsa_extra_requested = False
             opsa_topk_k = None
             opsa_gather_indices = None
+        if simple_xtok_requested and self.use_ulysses_sp:
+            raise RuntimeError(
+                "[EasyOPD:simple] cross-tokenizer KD is not supported with "
+                "ulysses_sequence_parallel_size > 1 because the local rank only "
+                "holds a sliced rmpad logits view."
+            )
         response_length = micro_batch["responses"].size(-1)
         multi_modal_inputs = {}
         if "multi_modal_inputs" in micro_batch.keys():
@@ -254,6 +268,71 @@ class DataParallelPPOActor(BasePPOActor):
                         labels=input_ids_rmpad_rolled,
                         inplace_backward=inplace_backward,
                     )
+
+                    # ============ [EasyOPD:Simple/SimCT] Cross-tokenizer KD from full student logits ============
+                    # Dispatch the per-token KD processor based on policy_loss.loss_mode.
+                    #   * simple  -> easyopd.methods.simple.losses.compute_simple_xtok_logits_processor
+                    #               returns Tensor[1, total_nnz] (per-token KL on overlap sub-vocab)
+                    #   * simct   -> easyopd.methods.simct.losses.compute_simct_xtok_logits_processor
+                    #               returns dict with key "distillation_losses" -> Tensor[1, total_nnz]
+                    #               (per-segment KL placed on the segment's first student token,
+                    #                using span virtual-vocabulary logits — the SimCT algorithm).
+                    # Previously this site hard-coded the simple processor regardless of
+                    # loss_mode, which silently turned `loss_mode=simct` into a simple-KD
+                    # rerun. The dispatch below restores the intended behaviour.
+                    if simple_xtok_requested:
+                        _xtok_loss_mode = self.config.policy_loss.get("loss_mode", "vanilla")
+                        if _xtok_loss_mode == "simct":
+                            from easyopd.methods.simct.losses import (
+                                compute_simct_xtok_logits_processor as _xtok_processor,
+                            )
+                        else:
+                            from easyopd.methods.simple.losses import (
+                                compute_simple_xtok_logits_processor as _xtok_processor,
+                            )
+
+                        if not hasattr(self, "_easyopd_distillation_config"):
+                            self._easyopd_distillation_config = getattr(self.config, "distillation", None)
+                        distillation_config = self._easyopd_distillation_config
+                        if distillation_config is None:
+                            raise RuntimeError(
+                                f"[EasyOPD:{_xtok_loss_mode}] actor config is missing distillation config; "
+                                "cannot compute cross-tokenizer KD."
+                            )
+                        simple_xtok_data = {
+                            "input_ids": input_ids_rmpad.squeeze(0),
+                            "response_mask": micro_batch["response_mask"],
+                            "teacher_hidden_states": micro_batch["teacher_hidden_states"],
+                            "teacher_input_ids": micro_batch["teacher_input_ids"],
+                            "teacher_loss_mask": micro_batch["teacher_loss_mask"],
+                        }
+                        _xtok_processor_out = _xtok_processor(
+                            student_logits=logits_rmpad.unsqueeze(0),
+                            data=simple_xtok_data,
+                            cu_seqlens=cu_seqlens,
+                            config=self.config,
+                            distillation_config=distillation_config,
+                        )
+                        # Unify the two processors' return shapes:
+                        #   simple -> Tensor[1, total_nnz]
+                        #   simct  -> dict with "distillation_losses" -> Tensor[1, total_nnz]
+                        if isinstance(_xtok_processor_out, dict):
+                            if "distillation_losses" not in _xtok_processor_out:
+                                raise RuntimeError(
+                                    f"[EasyOPD:{_xtok_loss_mode}] processor returned a dict without "
+                                    "'distillation_losses' key; cannot proceed."
+                                )
+                            simple_xtok_rmpad = _xtok_processor_out["distillation_losses"].squeeze(0)
+                        else:
+                            simple_xtok_rmpad = _xtok_processor_out.squeeze(0)
+                        simple_xtok_full = pad_input(
+                            hidden_states=simple_xtok_rmpad.unsqueeze(-1),
+                            indices=indices,
+                            batch=batch_size,
+                            seqlen=seqlen,
+                        )
+                        simple_xtok_loss = simple_xtok_full.squeeze(-1)[:, -response_length - 1 : -1]
+                    # ============ [EasyOPD:Simple/SimCT] End ============
 
                     # compute entropy
                     if calculate_entropy:
@@ -399,7 +478,9 @@ class DataParallelPPOActor(BasePPOActor):
                             opsa_extra["gathered_log_probs"] = (gathered_logits - lse).to(torch.float32)
                     # ============ [EasyOPD:OPSA] End ============
 
-            if opsa_caller_requested_extra:
+            if simple_xtok_loss is not None:
+                opsa_extra["simple_xtok_loss"] = simple_xtok_loss
+            if extra_caller_requested:
                 return entropy, log_probs, opsa_extra
             return entropy, log_probs
 
@@ -560,6 +641,13 @@ class DataParallelPPOActor(BasePPOActor):
             non_tensor_select_keys.append("opd_teacher")
         # ============ [EasyOPD] End ============
 
+        # ============ [EasyOPD:Simple] Include cross-tokenizer teacher sidecar fields ============
+        if self.config.policy_loss.get("loss_mode", "vanilla") in ("simple", "simct"):
+            for key in ("teacher_hidden_states", "teacher_input_ids", "teacher_loss_mask"):
+                if key in data.non_tensor_batch.keys():
+                    non_tensor_select_keys.append(key)
+        # ============ [EasyOPD:Simple] End ============
+
         # ============ [EasyOPD] Include self-distillation keys ============
         loss_mode = self.config.policy_loss.get("loss_mode", "vanilla")
         # Resolve loss_mode through the registry alias mapping so that
@@ -660,18 +748,26 @@ class DataParallelPPOActor(BasePPOActor):
                     opsa_gather_indices = None
                     if self.config.get("opsa_enable", False) and "opsa_teacher_topk_indices" in model_inputs:
                         opsa_gather_indices = model_inputs["opsa_teacher_topk_indices"]
+                    simple_xtok_requested = (
+                        self.config.policy_loss.get("loss_mode", "vanilla") in ("simple", "simct")
+                        and "teacher_hidden_states" in model_inputs
+                        and "teacher_input_ids" in model_inputs
+                        and "teacher_loss_mask" in model_inputs
+                    )
 
-                    if opsa_gather_indices is not None:
-                        entropy, log_prob, opsa_extra = self._forward_micro_batch(
+                    if opsa_gather_indices is not None or simple_xtok_requested:
+                        entropy, log_prob, forward_extra = self._forward_micro_batch(
                             model_inputs, temperature=temperature, calculate_entropy=calculate_entropy,
                             opsa_gather_indices=opsa_gather_indices,
                         )
-                        student_topk_log_probs = opsa_extra.get("gathered_log_probs", None)
+                        student_topk_log_probs = forward_extra.get("gathered_log_probs", None)
+                        simple_xtok_loss = forward_extra.get("simple_xtok_loss", None)
                     else:
                         entropy, log_prob = self._forward_micro_batch(
                             model_inputs, temperature=temperature, calculate_entropy=calculate_entropy
                         )
                         student_topk_log_probs = None
+                        simple_xtok_loss = None
                     # ============ [EasyOPD:OPSA] End ============
 
                     if on_policy:
@@ -1026,51 +1122,27 @@ class DataParallelPPOActor(BasePPOActor):
 
                     # ============ [EasyOPD:Simple/SimCT] Cross-tokenizer KD loss ============
                     if loss_mode in ("simple", "simct"):
-                        # Simple KD: use ref_log_prob as teacher signal and compute
-                        # reverse KL divergence at the token level.
-                        # When a dedicated teacher is available via distillation config,
-                        # its logprobs are stored in ref_log_prob by the trainer loop.
-                        teacher_lp = model_inputs.get("ref_log_prob")
-                        if teacher_lp is None:
-                            # Fallback: treat old_log_prob as teacher
-                            teacher_lp = old_log_prob
+                        if simple_xtok_loss is None:
+                            raise RuntimeError(
+                                f"[EasyOPD:{loss_mode}] teacher sidecar fields were not available in actor forward; "
+                                "refusing to fall back to old_log_prob because that would produce a zero KD signal."
+                            )
 
-                        # Reverse KL: E_student[log(student/teacher)]
-                        # = sum_t student_logp(t) - teacher_logp(t)
-                        kl_per_token = (log_prob - teacher_lp) * response_mask
-
-                        # Forward KL: E_teacher[log(teacher/student)]
-                        # = sum_t teacher_logp(t) - student_logp(t)
-                        # Use configurable direction
-                        simple_kl_direction = self.config.policy_loss.get(
-                            "simple_kl_direction", "reverse"
-                        )
-                        if simple_kl_direction == "forward":
-                            # Forward KL: teacher * (teacher - student)
-                            # With only per-token logprobs, approximate as:
-                            # -(teacher_lp - log_prob) weighted by exp(teacher_lp)
-                            kl_per_token = (teacher_lp.exp() * (teacher_lp - log_prob)) * response_mask
-                        else:
-                            # Reverse KL: student * (student - teacher)
-                            kl_per_token = (log_prob.exp() * (log_prob - teacher_lp)) * response_mask
-
-                        # Clamp to avoid extreme values
                         simple_loss_clamp = self.config.policy_loss.get("simple_loss_clamp", 10.0)
-                        kl_per_token = kl_per_token.clamp(min=0.0, max=simple_loss_clamp)
-
+                        kl_per_token = simple_xtok_loss.to(response_mask.device, dtype=log_prob.dtype).clamp(
+                            min=0.0, max=simple_loss_clamp
+                        )
                         policy_loss = agg_loss(
                             loss_mat=kl_per_token, loss_mask=response_mask, loss_agg_mode=loss_agg_mode
                         )
 
-                        if self.config.use_dynamic_bsz:
-                            loss = policy_loss * loss_scale_factor
-                        else:
-                            loss = policy_loss * loss_scale_factor
+                        loss = policy_loss * loss_scale_factor
                         loss.backward()
 
+                        valid_tokens = response_mask.sum().clamp(min=1)
                         simple_metrics = {
-                            f"{loss_mode}/kl_loss": policy_loss.detach().item() * loss_scale_factor,
-                            f"{loss_mode}/kl_per_token_mean": kl_per_token.sum().item() / response_mask.sum().clamp(min=1).item(),
+                            f"{loss_mode}/xtok_kd_loss": policy_loss.detach().item() * loss_scale_factor,
+                            f"{loss_mode}/xtok_kd_per_token_mean": (kl_per_token * response_mask).sum().detach().item() / valid_tokens.item(),
                         }
                         append_to_dict(metrics, simple_metrics)
                         continue

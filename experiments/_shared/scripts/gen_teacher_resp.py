@@ -34,7 +34,8 @@ def main():
 
     from vllm import LLM, SamplingParams
     llm = LLM(model=args.teacher_model, tensor_parallel_size=args.tensor_parallel_size,
-              trust_remote_code=True, max_model_len=4096, gpu_memory_utilization=0.85)
+              trust_remote_code=True, max_model_len=4096, gpu_memory_utilization=0.90,
+              enforce_eager=True)
     sampling_params = SamplingParams(temperature=args.temperature, max_tokens=args.max_tokens, top_p=0.95)
 
     print("Starting generation...")

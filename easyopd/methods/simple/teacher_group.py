@@ -66,6 +66,13 @@ class TeacherActorGroup:
           for actual binding. This is the KDFlow pattern and is required to
           let teacher actors share a placement group with student rollouts
           on disjoint GPU IDs without Ray re-masking devices.
+        * When colocating with verl's strict 8-GPU PG (default for the
+          shared-mode launch.sh), set `num_gpus_per_actor=0` so that the
+          teacher does NOT pre-occupy entries in Ray's GPU ledger — verl's
+          `_check_resource_available()` reads available GPUs *after* PG
+          creation, and any fractional pre-allocation makes verl reject
+          its own 8-GPU request. CPU resource is independent
+          (`num_cpus_per_actor`, default 1.0) so the actor still schedules.
 
     Load balancing:
         * `compute_hidden_states_batch` greedily assigns each sample to the
@@ -84,6 +91,7 @@ class TeacherActorGroup:
         dp_size: int,
         num_gpus_per_node: int = 8,
         num_gpus_per_actor: float = 0.2,
+        num_cpus_per_actor: float = 0.1,
         pg: Optional[PlacementGroup] = None,
         reordered_bundle_indices: Optional[Sequence[int]] = None,
         reordered_gpu_ids: Optional[Sequence[int]] = None,
@@ -100,7 +108,12 @@ class TeacherActorGroup:
                 `base_gpu_id` for each actor when no PG is provided).
             num_gpus_per_actor: fractional Ray GPU resource per actor. Kept
                 small (~0.2) so the actual GPU is bound by `base_gpu_id`,
-                not by Ray's CUDA_VISIBLE_DEVICES masking.
+                not by Ray's CUDA_VISIBLE_DEVICES masking. Set to 0 to
+                fully bypass Ray's GPU ledger when colocating with a strict
+                full-GPU PG (e.g. verl's shared-mode 8S+8T layout).
+            num_cpus_per_actor: Ray CPU resource per actor (default 1.0).
+                Independent from `num_gpus_per_actor` so we can ask for 0
+                GPU and >0 CPU at the same time.
             pg: optional placement group within which actors should be
                 scheduled. If provided, `reordered_bundle_indices` and
                 `reordered_gpu_ids` should specify the per-actor bundle/GPU
@@ -130,6 +143,18 @@ class TeacherActorGroup:
         self.pp_size = actor_config.pp_size
         self.num_gpus_per_node = num_gpus_per_node
         self.num_gpus_per_actor = num_gpus_per_actor
+        # CPU resource is decoupled from GPU resource: when colocating with
+        # verl's strict 8-GPU PG (`num_gpus_per_actor=0`), Ray would still
+        # need a non-zero `num_cpus` to schedule the actor on a worker node.
+        # Keep this small (default 0.1) so the teacher does not eat into
+        # verl's CPU budget — verl's actor_rollout_ref worker group asks for
+        # 1 CPU per worker (8 CPUs total) on top of its 8 GPUs, and Ray's
+        # CPU ledger is shared. Setting num_cpus_per_actor=1.0 caused 8
+        # teacher actors to consume 8 CPUs, leaving only 7 for verl
+        # (RAY_NUM_CPUS=16 - 1 driver - 8 teachers = 7), which made verl's
+        # 8-worker request "infeasible" and the trainer would hang in
+        # ray.get() forever.
+        self.num_cpus_per_actor = float(num_cpus_per_actor)
 
         self._pg = pg
         self._reordered_bundle_indices = (
@@ -194,7 +219,7 @@ class TeacherActorGroup:
             base_gpu_id = (engine_idx * num_gpu_per_engine) % self.num_gpus_per_node
 
         options: dict = {
-            "num_cpus": self.num_gpus_per_actor,
+            "num_cpus": self.num_cpus_per_actor,
             "num_gpus": self.num_gpus_per_actor,
             "max_concurrency": 2,
             "runtime_env": {"env_vars": env_vars},
@@ -245,7 +270,7 @@ class TeacherActorGroup:
             bundle_idx = self._reordered_bundle_indices[gpu_offset]
 
             options = {
-                "num_cpus": self.num_gpus_per_actor,
+                "num_cpus": self.num_cpus_per_actor,
                 "num_gpus": self.num_gpus_per_actor,
                 "max_concurrency": 2,
                 "runtime_env": {"env_vars": env_vars},

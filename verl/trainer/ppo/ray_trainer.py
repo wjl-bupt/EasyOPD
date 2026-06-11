@@ -489,6 +489,22 @@ class RayPPOTrainer:
             self.easyopd_metrics = None
         # ============ [EasyOPD] End ============
 
+        # ============ [EasyOPD:Simple] Cross-tokenizer teacher sidecar ============
+        self.simple_teacher_sidecar = None
+        self.simple_xtok_enabled = False
+        actor_loss_mode = config.actor_rollout_ref.actor.policy_loss.get("loss_mode", "vanilla")
+        distillation_cfg = getattr(config, "distillation", None)
+        distillation_enabled = bool(distillation_cfg is not None and distillation_cfg.get("enabled", False))
+        if actor_loss_mode in {"simple", "simct"} and distillation_enabled:
+            from easyopd.methods.simple.teacher_sidecar import EasyOPDSimpleTeacherSidecar
+
+            self.simple_teacher_sidecar = EasyOPDSimpleTeacherSidecar(config)
+            self.simple_xtok_enabled = True
+            print(
+                f"[EasyOPD:simple] Cross-tokenizer teacher sidecar enabled for loss_mode={actor_loss_mode}"
+            )
+        # ============ [EasyOPD:Simple] End ============
+
         # ============ [EasyOPD:OPSA] On-Policy Self-Distillation configuration ============
         self.opsa_enable = config.actor_rollout_ref.actor.get("opsa_enable", False)
         if self.opsa_enable:
@@ -881,6 +897,89 @@ class RayPPOTrainer:
     # ============ [EasyOPD] End ============
 
     # ============ [EasyOPD] Build self-distillation batch (Vision-OPD) ============
+    def _maybe_build_simple_xtok_batch(self, batch):
+        """Build teacher hidden states for simple cross-tokenizer KD.
+
+        The actor-side simple loss needs ragged teacher fields in
+        ``non_tensor_batch``: ``teacher_hidden_states``, ``teacher_input_ids``
+        and ``teacher_loss_mask``. This method constructs teacher-side
+        prompt+response inputs from the rollout batch and forwards them to the
+        long-lived teacher sidecar.
+        """
+        if not self.simple_xtok_enabled or self.simple_teacher_sidecar is None:
+            return None
+
+        from verl import DataProto
+
+        response_mask = batch.batch["response_mask"]
+        prompts = batch.batch["prompts"]
+        responses = batch.batch["responses"]
+        batch_size = responses.shape[0]
+
+        teacher_input_ids = []
+        teacher_loss_masks = []
+        teacher_texts = []
+        prompt_token_counts = []
+        response_token_counts = []
+
+        for i in range(batch_size):
+            prompt_ids = prompts[i]
+            if torch.is_tensor(prompt_ids):
+                prompt_ids = prompt_ids.detach().cpu()
+            prompt_ids = prompt_ids.tolist()
+            prompt_text = self.tokenizer.decode(prompt_ids, skip_special_tokens=True)
+
+            valid_response_len = int(response_mask[i].sum().item())
+            response_ids = responses[i, :valid_response_len]
+            if torch.is_tensor(response_ids):
+                response_ids = response_ids.detach().cpu()
+            response_ids = response_ids.tolist()
+            response_text = self.tokenizer.decode(response_ids, skip_special_tokens=True)
+
+            teacher_ids, loss_mask, full_text = self.simple_teacher_sidecar.encode_for_teacher(
+                prompt_text=prompt_text,
+                response_text=response_text,
+                max_length=self.simple_teacher_sidecar.teacher_context_length,
+                mask_mode="label",
+            )
+            teacher_input_ids.append(np.asarray(teacher_ids, dtype=np.int64))
+            teacher_loss_masks.append(np.asarray(loss_mask, dtype=bool))
+            teacher_texts.append(full_text)
+            prompt_token_counts.append(len(prompt_ids))
+            response_token_counts.append(valid_response_len)
+
+        teacher_hidden_states = self.simple_teacher_sidecar.compute_hidden_states_batch(
+            prompts=teacher_texts,
+            loss_masks=teacher_loss_masks,
+            input_ids=[ids.tolist() for ids in teacher_input_ids],
+            method_name="simple",
+        )
+
+        def _object_array(items):
+            arr = np.empty(len(items), dtype=object)
+            arr[:] = list(items)
+            return arr
+
+        non_tensors = {
+            "teacher_hidden_states": _object_array(teacher_hidden_states),
+            "teacher_input_ids": _object_array(teacher_input_ids),
+            "teacher_loss_mask": _object_array(teacher_loss_masks),
+        }
+        metrics = {
+            "simple/teacher_batch_size": float(batch_size),
+            "simple/teacher_prompt_tokens_mean": float(np.mean(prompt_token_counts)) if prompt_token_counts else 0.0,
+            "simple/teacher_response_tokens_mean": float(np.mean(response_token_counts)) if response_token_counts else 0.0,
+            "simple/teacher_loss_tokens_mean": float(np.mean([mask.sum() for mask in teacher_loss_masks])) if teacher_loss_masks else 0.0,
+        }
+
+        # DataProto.union() always unions TensorDicts first, so a pure
+        # non_tensor DataProto (batch=None) cannot be merged into the training
+        # batch. Attach an empty TensorDict carrying only the batch size.
+        from tensordict import TensorDict
+
+        empty_batch = TensorDict({}, batch_size=[batch_size])
+        return DataProto(batch=empty_batch, non_tensor_batch=non_tensors), metrics
+
     def _maybe_build_vision_opd_batch(
         self,
         batch,
@@ -1803,9 +1902,13 @@ class RayPPOTrainer:
         # create actor and rollout
         if self.hybrid_engine:
             resource_pool = self.resource_pool_manager.get_resource_pool(Role.ActorRollout)
+            actor_rollout_config = deepcopy(self.config.actor_rollout_ref)
+            if hasattr(self.config, "distillation"):
+                with open_dict(actor_rollout_config):
+                    actor_rollout_config.distillation = self.config.distillation
             actor_rollout_cls = RayClassWithInitArgs(
                 cls=self.role_worker_mapping[Role.ActorRollout],
-                config=self.config.actor_rollout_ref,
+                config=actor_rollout_config,
                 role="actor_rollout",
             )
             self.resource_pool_to_cls[resource_pool]["actor_rollout"] = actor_rollout_cls
@@ -2382,6 +2485,18 @@ class RayPPOTrainer:
                                     self.config.trainer, "on_policy_merge", True
                                 )
                         # ============ [EasyOPD] End ============
+
+                        # ============ [EasyOPD:Simple] Teacher hidden-state injection for cross-tokenizer KD ============
+                        simple_xtok_result = self._maybe_build_simple_xtok_batch(batch)
+                        if simple_xtok_result is not None:
+                            simple_xtok_batch, simple_xtok_metrics = simple_xtok_result
+                            batch = batch.union(simple_xtok_batch)
+                            metrics.update(simple_xtok_metrics)
+                            print(
+                                f"[EasyOPD:simple] Step {self.global_steps}: teacher hidden states injected, "
+                                f"batch={len(simple_xtok_batch.non_tensor_batch['teacher_hidden_states'])}"
+                            )
+                        # ============ [EasyOPD:Simple] End ============
 
                         # ============ [EasyOPD:OPSA] Teacher log-prob injection for self-distillation ============
                         if self.opsa_enable:

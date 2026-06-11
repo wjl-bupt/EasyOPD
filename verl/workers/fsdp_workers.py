@@ -654,6 +654,12 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
         if self._is_actor:
             actor_cfg = omega_conf_to_dataclass(self.config.actor)
+            # [EasyOPD:simple] The actor loss only receives the actor sub-config,
+            # but cross-tokenizer KD also needs the top-level distillation config
+            # and the student tokenizer/model path.
+            if hasattr(self.config, "distillation"):
+                actor_cfg.distillation = self.config.distillation
+            actor_cfg.student_model_path = self.config.model.path
             self.actor = DataParallelPPOActor(
                 config=actor_cfg, actor_module=self.actor_module_fsdp, actor_optimizer=self.actor_optimizer
             )

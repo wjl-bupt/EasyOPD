@@ -1,0 +1,11 @@
+{
+  "model_name": "simple_phi4mini_global_step_154",
+  "model_path": "/root/workspace/models/runs/01_cross_tokenizer_opd/simple/simple_phi4mini/hf/global_step_154",
+  "results": {
+    "gsm8k": {
+      "accuracy": 87.18726307808946,
+      "correct": 1150,
+      "total": 1319
+    }
+  }
+}

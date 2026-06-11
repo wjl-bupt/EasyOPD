@@ -359,22 +359,43 @@ def compute_simple_xtok_logits_processor(
         resp_hi_global = s_hi  # exclusive
         total_response += stu_resp_len
 
-        # Teacher hidden states: pre-cropped by sidecar to response positions.
-        tea_resp_hs_np: np.ndarray = teacher_hidden_states_arr[b]
-        if tea_resp_hs_np is None or tea_resp_hs_np.shape[0] == 0:
+        # Teacher hidden states are selected at label/logit positions:
+        # position i predicts token i+1. For alignment, compare those label
+        # tokens; for loss placement, write KL back to the predicting logits.
+        tea_label_hs_np = np.asarray(teacher_hidden_states_arr[b])
+        if tea_label_hs_np is None or tea_label_hs_np.shape[0] == 0:
             continue
-        tea_input_ids_np: np.ndarray = teacher_input_ids_arr[b]
-        tea_loss_mask_np: np.ndarray = teacher_loss_mask_arr[b].astype(bool)
-        tea_resp_ids = tea_input_ids_np[tea_loss_mask_np].tolist()
+        tea_label_hs_np = np.asarray(tea_label_hs_np, dtype=np.float32)
+        tea_input_ids_np = np.asarray(teacher_input_ids_arr[b], dtype=np.int64)
+        tea_loss_mask_np = np.asarray(teacher_loss_mask_arr[b], dtype=bool)
+        tea_logit_pos = np.nonzero(tea_loss_mask_np)[0]
+        tea_label_pos = tea_logit_pos + 1
+        valid_tea = tea_label_pos < len(tea_input_ids_np)
+        tea_logit_pos = tea_logit_pos[valid_tea]
+        tea_label_pos = tea_label_pos[valid_tea]
+        tea_label_hs_np = tea_label_hs_np[valid_tea]
+        if len(tea_label_pos) == 0:
+            continue
+        tea_label_ids = tea_input_ids_np[tea_label_pos].tolist()
 
-        # Student response token ids (used only for decode → tokens).
-        stu_resp_ids = (
-            input_ids_rmpad[resp_lo_global:resp_hi_global].detach().cpu().tolist()
+        # Student label tokens are the response tokens, while the logits that
+        # predict them occupy [resp_lo_global - 1, resp_hi_global - 1).
+        stu_label_ids = input_ids_rmpad[resp_lo_global:resp_hi_global].detach().cpu().tolist()
+        stu_logit_global = torch.arange(
+            resp_lo_global - 1,
+            resp_hi_global - 1,
+            dtype=torch.long,
+            device=device,
         )
+        valid_stu = stu_logit_global >= s_lo
+        if not bool(valid_stu.any().item()):
+            continue
+        stu_logit_global = stu_logit_global[valid_stu]
+        stu_label_ids = [tok for tok, keep in zip(stu_label_ids, valid_stu.detach().cpu().tolist()) if keep]
 
-        # Greedy character-level alignment.
-        stu_tokens = student_tokenizer.convert_ids_to_tokens(stu_resp_ids)
-        tea_tokens = teacher_tokenizer.convert_ids_to_tokens(tea_resp_ids)
+        # Greedy character-level alignment over label tokens.
+        stu_tokens = student_tokenizer.convert_ids_to_tokens(stu_label_ids)
+        tea_tokens = teacher_tokenizer.convert_ids_to_tokens(tea_label_ids)
         tea_align_idx, stu_align_idx = align_sequences(
             tea_tokens,
             stu_tokens,
@@ -388,11 +409,11 @@ def compute_simple_xtok_logits_processor(
         stu_local = torch.tensor(stu_align_idx, dtype=torch.long, device=device)
         tea_local = torch.tensor(tea_align_idx, dtype=torch.long, device=device)
 
-        # Absolute rmpad positions for the aligned student tokens.
-        stu_abs_global = stu_local + resp_lo_global
+        # Absolute rmpad logit positions for the aligned student label tokens.
+        stu_abs_global = stu_logit_global.index_select(0, stu_local)
 
         # Project teacher hidden → overlap logits.
-        tea_hs = torch.from_numpy(tea_resp_hs_np).to(device=device, dtype=dtype)
+        tea_hs = torch.from_numpy(tea_label_hs_np).to(device=device, dtype=dtype)
         tea_hs_aligned = tea_hs.index_select(0, tea_local)              # [N, H]
         with torch.no_grad():
             tea_full_logits = teacher_lm_head(tea_hs_aligned)           # [N, V_tea]
@@ -400,7 +421,7 @@ def compute_simple_xtok_logits_processor(
             -1, teacher_overlap_ids
         )                                                                # [N, K]
 
-        # Student: gather the aligned positions, then column-crop.
+        # Student: gather the aligned logit positions, then column-crop.
         stu_logits_full = student_logits[0].index_select(0, stu_abs_global)
         stu_logits_overlap = stu_logits_full.index_select(
             -1, student_overlap_ids

@@ -1,0 +1,11 @@
+{
+  "model_name": "sft_phi4mini_global_step_78",
+  "model_path": "/root/workspace/models/runs/01_cross_tokenizer_opd/sft/sft_phi4mini/hf/global_step_78",
+  "results": {
+    "gsm8k": {
+      "accuracy": 87.03563305534496,
+      "correct": 1148,
+      "total": 1319
+    }
+  }
+}

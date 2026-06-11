@@ -297,25 +297,7 @@ class MultiTurnSFTDataset(Dataset):
         tools = self.tools[item] if self.tools is not None else None
         enable_thinking = self.enable_thinking[item] if self.enable_thinking is not None else None
 
-        # First, get the full conversation tokens
-        try:
-            full_tokens = tokenizer.apply_chat_template(
-                messages,
-                tools=tools,
-                tokenize=True,
-                return_tensors="pt",
-                add_generation_prompt=False,
-                enable_thinking=enable_thinking,
-                **self.apply_chat_template_kwargs,
-            )
-        except Exception as e:
-            logging.error(
-                f"Error applying chat template: {e}\nMessages: {messages}\nTools: {tools}\nEnable thinking: "
-                f"{enable_thinking}"
-            )
-            raise
-
-        # Track concatenated tokens for validation
+        # Build tokens via per-message tokenization directly
         concat_tokens = []
         concat_loss_mask = []
         concat_attention_mask = []
@@ -359,10 +341,10 @@ class MultiTurnSFTDataset(Dataset):
             else:
                 raise ValueError(f"Unknown role: {cur_messages['role']}")
 
-        # Validate and convert tokens
-        input_ids, loss_mask, attention_mask = self._validate_and_convert_tokens(
-            full_tokens, concat_tokens, concat_loss_mask, concat_attention_mask
-        )
+        # Convert concatenated tokens to tensors directly
+        input_ids = torch.tensor(concat_tokens, dtype=torch.long)
+        loss_mask = torch.tensor(concat_loss_mask, dtype=torch.long)
+        attention_mask = torch.tensor(concat_attention_mask, dtype=torch.long)
 
         # Handle sequence length
         sequence_length = input_ids.shape[0]

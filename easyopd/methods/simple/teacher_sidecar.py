@@ -9,9 +9,24 @@
 #   1. Spin up an SGLang teacher pool via `TeacherActorGroup` on the GPU
 #      slots that verl reserved for teachers (n_gpus_per_node * nnodes).
 #   2. Expose `compute_hidden_states_batch(prompts, loss_masks)` to be
-#      called from `agent_loop._postprocess`.
+#      called from `agent_loop._postprocess`. Wakes the teacher engines
+#      before SGLang prefill and sleeps them again afterward (wrapped in
+#      try/finally so any error path still re-sleeps), so SGLang only
+#      occupies GPU memory during the brief teacher prefill window.
 #   3. Provide a shutdown / sleep interface so the trainer's existing
 #      teardown path keeps working.
+#
+# Backend choice: the teacher backend is ALWAYS SGLang. The optional
+# `teacher_models.<key>.inference.name` config field is purely informational
+# (we log a warning if it isn't "sglang"); this sidecar constructs
+# `SGLangEngineService` unconditionally via `TeacherActorGroup`.
+#
+# Coexistence with verl vLLM rollout: this sidecar NEVER touches verl's
+# vLLM engine; vLLM sleep/wake is fully managed by verl's
+# `FSDPVLLMShardingManager` (auto-sleeps after `generate_sequences`). The
+# wake/sleep handled here applies *only* to the SGLang teacher engines, so
+# vLLM (student rollout) and SGLang (teacher) end up time-multiplexing the
+# shared GPU memory pool without ever fighting each other for it.
 #
 # Why a separate sidecar rather than reusing verl's manager?
 #   * verl's `TeacherModelManager` returns an `LLMServerClient` whose API
@@ -89,11 +104,8 @@ class EasyOPDSimpleTeacherSidecar:
                 object passed to verl's ray trainer). We pull the
                 distillation sub-tree out internally.
         """
-        from verl.utils.config import omega_conf_to_dataclass
-        from verl.workers.config import DistillationConfig
-
         self.full_config = config
-        self.distillation_config: DistillationConfig = omega_conf_to_dataclass(config.distillation)
+        self.distillation_config = config.distillation
 
         teacher_models = self.distillation_config.teacher_models
         if len(teacher_models) != 1:
@@ -130,20 +142,60 @@ class EasyOPDSimpleTeacherSidecar:
             else (0.0 if share_student_pool else 0.2)
         )
 
+        # Defensive guard: when sharing the student GPU pool with verl's
+        # strict full-GPU PG (8S+8T colocated), any non-zero per-actor GPU
+        # share will cause verl's `_check_resource_available()` to abort
+        # with "Total available GPUs X.Y < total desired GPUs Z" because
+        # verl reads Ray's GPU ledger AFTER teacher actors already pre-
+        # allocated their fractional share. Force it back to 0 and warn.
+        if share_student_pool and num_gpus_per_actor > 0:
+            logger.warning(
+                "[EasyOPD:simple sidecar] share_student_pool=True but "
+                "simple_teacher_num_gpus_per_actor=%.2f (non-zero); "
+                "Ray's GPU ledger would be over-subscribed and verl's "
+                "PG creation would abort. Forcing num_gpus_per_actor=0.0; "
+                "physical binding still works via base_gpu_id + "
+                "RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1.",
+                num_gpus_per_actor,
+            )
+            num_gpus_per_actor = 0.0
+
+        inference_cfg = teacher_cfg.inference
+
+        # Backend sanity check: sidecar always uses SGLang, but the launch
+        # script may carry a stale/inherited `inference.name`. We warn rather
+        # than raise so old launchers stay runnable.
+        configured_backend = getattr(inference_cfg, "name", None)
+        if configured_backend is not None and str(configured_backend).lower() != "sglang":
+            logger.warning(
+                "[EasyOPD:simple sidecar] teacher_models.%s.inference.name=%r is "
+                "ignored; sidecar always uses SGLang as the teacher backend.",
+                self.teacher_key,
+                configured_backend,
+            )
+
         actor_config = TeacherActorConfig(
             model_path=teacher_cfg.model_path,
-            tp_size=int(teacher_cfg.inference.tensor_model_parallel_size),
-            pp_size=int(teacher_cfg.inference.pipeline_model_parallel_size),
+            tp_size=int(getattr(inference_cfg, "tensor_model_parallel_size", 1) or 1),
+            pp_size=int(getattr(inference_cfg, "pipeline_model_parallel_size", 1) or 1),
             ep_size=1,
             mem_fraction_static=float(
-                getattr(teacher_cfg.inference, "gpu_memory_utilization", 0.6) or 0.6
+                getattr(inference_cfg, "gpu_memory_utilization", 0.6) or 0.6
             ),
-            context_length=getattr(teacher_cfg.inference, "max_model_len", None),
+            context_length=getattr(inference_cfg, "max_model_len", None),
             quantization=None,
-            enable_sleep=False,  # per design: long-resident, no sleep
+            # Time-multiplex SGLang with vLLM/FSDP on shared GPUs: enable
+            # sleep so the teacher releases its weights+KV-cache between
+            # prefill calls. compute_hidden_states_batch wakes immediately
+            # before each call and re-sleeps in `finally`.
+            enable_sleep=True,
             offload_tags="all",
         )
         self.teacher_context_length = actor_config.context_length
+        # Cache scheduling/topology metadata for diagnostic messages.
+        self._dp_size = dp_size
+        self._base_gpu_ids = teacher_gpu_ids
+        self._mem_fraction_static = actor_config.mem_fraction_static
 
         logger.warning(
             "[EasyOPD:simple sidecar] launching TeacherActorGroup "
@@ -176,6 +228,36 @@ class EasyOPDSimpleTeacherSidecar:
             teacher_visible_devices=teacher_visible_devices,
         )
 
+        # Immediately put the teacher to sleep after init: the engines have
+        # finished loading weights and warmup but the trainer is not yet at
+        # the teacher-prefill stage. Sleeping here releases ~teacher_size
+        # GB / GPU so verl's vLLM rollout can safely allocate up to
+        # `gpu_memory_utilization` of the same GPUs. Mirrors KDFlow's
+        # `on_policy_kd_trainer.py` which sleeps teacher actors right after
+        # `TeacherActorGroup` construction.
+        self._actor_group_supports_sleep = (
+            hasattr(self.actor_group, "sleep") and hasattr(self.actor_group, "wakeup")
+        )
+        if self._actor_group_supports_sleep:
+            try:
+                self.actor_group.sleep(tags="all")
+                logger.info(
+                    "[EasyOPD:simple sidecar] initial sleep done; teacher actors are dormant."
+                )
+            except Exception:
+                # Don't fail trainer init just because the initial sleep
+                # failed; we will still try to wake/sleep around each
+                # prefill call.
+                logger.exception(
+                    "[EasyOPD:simple sidecar] initial actor_group.sleep failed (continuing)."
+                )
+        else:
+            logger.warning(
+                "[EasyOPD:simple sidecar] actor_group does not expose sleep/wakeup; "
+                "teacher will be long-resident on GPU. Expect higher steady-state "
+                "GPU memory pressure."
+            )
+
         # Cache tokenizers eagerly (cheap, ~hundreds of KB) so callers
         # don't need to re-load.
         from transformers import AutoTokenizer
@@ -197,7 +279,13 @@ class EasyOPDSimpleTeacherSidecar:
         input_ids: Optional[List[List[int]]] = None,
         method_name: str = "simple",
     ) -> List[np.ndarray]:
-        """Forward to the actor group. Returns one numpy array per sample."""
+        """Wake teacher engines, run prefill, then re-sleep teacher engines.
+
+        Wake/sleep are wrapped in try/finally so any failure path — including
+        SGLang prefill itself crashing — still leaves the teacher in the
+        sleep state, which is required for the next vLLM rollout to allocate
+        memory on the same GPUs.
+        """
         input_lengths = [len(ids) for ids in input_ids] if input_ids is not None else [len(p) for p in prompts]
         logger.debug(
             "[EasyOPD:%s sidecar] compute_hidden_states_batch batch=%d input_len_min=%s input_len_max=%s",
@@ -206,6 +294,21 @@ class EasyOPDSimpleTeacherSidecar:
             min(input_lengths) if input_lengths else 0,
             max(input_lengths) if input_lengths else 0,
         )
+
+        # ---- WAKE ----
+        if self._actor_group_supports_sleep:
+            try:
+                self.actor_group.wakeup(tags="all")
+            except Exception as exc:
+                # Wake failure is fatal: we cannot run prefill without the
+                # teacher's weights/KV cache being on GPU. Re-raise with
+                # diagnostic context so the trainer log is actionable.
+                raise RuntimeError(
+                    f"[EasyOPD:{method_name} sidecar] teacher wakeup failed: "
+                    f"dp_size={self._dp_size}, base_gpu_ids={self._base_gpu_ids}, "
+                    f"mem_fraction_static={self._mem_fraction_static}"
+                ) from exc
+
         try:
             return self.actor_group.compute_hidden_states_batch(
                 prompts=prompts,
@@ -219,6 +322,23 @@ class EasyOPDSimpleTeacherSidecar:
                 f"batch_size={len(prompts)}, input_len_min={min(input_lengths) if input_lengths else 0}, "
                 f"input_len_max={max(input_lengths) if input_lengths else 0}"
             ) from exc
+        finally:
+            # ---- SLEEP ----
+            # Re-sleep regardless of success/failure so the next vLLM
+            # rollout can claim its `gpu_memory_utilization` share. Sleep
+            # failures are logged but NOT propagated: a stuck-awake teacher
+            # is a degraded condition, not a fatal one (the next wakeup is
+            # idempotent) and we don't want to mask the original exception.
+            if self._actor_group_supports_sleep:
+                try:
+                    self.actor_group.sleep(tags="all")
+                except Exception:
+                    logger.exception(
+                        "[EasyOPD:%s sidecar] actor_group.sleep failed after "
+                        "compute_hidden_states_batch; teacher may remain awake "
+                        "and reduce vLLM headroom this step.",
+                        method_name,
+                    )
 
     def encode_for_teacher(
         self,
@@ -244,14 +364,28 @@ class EasyOPDSimpleTeacherSidecar:
         Returns:
             teacher_ids: List[int] of length T.
             loss_mask:   np.bool_[T] — selected teacher hidden-state positions.
-            full_text:   str — `prompt_text + response_text`. SGLang
+            full_text:   str — `prompt_text + response_text + " " + eos_token`
+                (the trailing EOS follows KDFlow's `_build_rollout_sample`
+                convention so the teacher's last hidden_state corresponds
+                to predicting the response's terminal EOS token). SGLang
                 tokenizes internally so we DO pass text, not ids; ids are
                 returned only for downstream cross-tokenizer alignment.
         """
         tea = self.teacher_tokenizer
         if max_length is None:
             max_length = self.teacher_context_length
-        full_text = prompt_text + response_text
+
+        # Append EOS to the response (KDFlow parity). Skip if response_text
+        # already ends with the teacher EOS marker to avoid double-EOS,
+        # which would shift the response hidden states by one position and
+        # silently corrupt the cross-tokenizer alignment downstream.
+        eos_token = tea.eos_token or ""
+        stripped_response = response_text.rstrip()
+        if eos_token and not stripped_response.endswith(eos_token):
+            full_text = prompt_text + response_text + " " + eos_token
+        else:
+            full_text = prompt_text + response_text
+
         full_ids = tea(full_text, add_special_tokens=False)["input_ids"]
         prompt_ids = tea(prompt_text, add_special_tokens=False)["input_ids"]
         # if max_length is not None and len(full_ids) > max_length:
@@ -297,6 +431,8 @@ class EasyOPDSimpleTeacherSidecar:
     # ------------------------------------------------------------------
 
     def shutdown(self) -> None:
+        # Best-effort: never propagate teardown errors so the trainer's
+        # outer cleanup path stays clean even if a teacher actor is wedged.
         try:
             self.actor_group.shutdown()
         except Exception:
