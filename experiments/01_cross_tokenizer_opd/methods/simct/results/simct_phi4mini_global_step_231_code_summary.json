@@ -1,0 +1,12 @@
+{
+  "model_name": "simct_phi4mini_global_step_231",
+  "model_path": "/root/workspace/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini/hf/global_step_231",
+  "results": {
+    "mbpp": {
+      "score": 0.588,
+      "accuracy": 58.8,
+      "correct": 294,
+      "total": 500
+    }
+  }
+}

@@ -32,7 +32,7 @@ trap 'rc=$?; echo "[FATAL] launch.sh exited with code $rc at line $LINENO (last 
 # Hyperparameters dispatched by TEACHER_LAYOUT (default = shared):
 #   shared (8S+8T colocated, KDFlow-aligned):
 #     train_batch_size / ppo_mini_batch_size = 64 (divisible by 8 student ranks)
-#     EXPECTED_FINAL_STEP = 9900 / 64 ≈ 154
+#     EXPECTED_FINAL_STEP = (9900 / 64) * 2 ≈ 308
 #     ROLLOUT_GPU_MEM_UTIL  = 0.55  (vLLM gpu_memory_utilization)
 #     TEACHER_GPU_MEM_UTIL  = 0.55  (SGLang mem_fraction_static)
 #     SIMPLE_TEACHER_NUM_GPUS_PER_ACTOR = 0 (verl-friendly; binding via base_gpu_id)
@@ -41,17 +41,17 @@ trap 'rc=$?; echo "[FATAL] launch.sh exited with code $rc at line $LINENO (last 
 #     so 0.55 + 0.55 > 1.0 is safe (only one is awake at a time).
 #   split (legacy 6 student + 2 teacher physical split):
 #     train_batch_size / ppo_mini_batch_size = 66 (divisible by 6 student ranks)
-#     EXPECTED_FINAL_STEP = 9900 / 66 = 150
+#     EXPECTED_FINAL_STEP = (9900 / 66) * 2 = 300
 #     ROLLOUT_GPU_MEM_UTIL  = 0.25, TEACHER_GPU_MEM_UTIL = 0.6
 #     SIMPLE_TEACHER_NUM_GPUS_PER_ACTOR = 1.0 (full Ray GPU per teacher actor)
 #
 # Other knobs (shared by both layouts):
 #   max_prompt / max_response   = 4096 / 4096   (max_model_len = 8193)
 #   ppo_max_token_len_per_gpu   = 16384         (default; lower this if FSDP unshard OOMs)
-#   actor_lr / warmup_ratio     = 5e-7 / 0.05
+#   actor_lr / warmup_ratio     = 2e-6 / 0.05   (SimCT-v2: aligned with ALM)
 #   rollout.n / temperature     = 1 / 0.6       (OPD doesn't need multi-sample)
-#   total_epochs                = 1
-#   save_freq                   = 77            (-> ckpt at step 77 and epoch-end)
+#   total_epochs                = 2
+#   save_freq                   = 77            (-> ckpts at step 77, 154, 231, 308)
 #   FSDP param/optimizer offload= True (always on, mandatory for shared mode
 #                                       to leave room for SGLang teacher KV cache).
 #
@@ -125,9 +125,13 @@ RL_VAL_PARQUET="${TRAIN_DATA_DIR}/rl_prompts_val.parquet"
 REWARD_FN="${SHARED_SCRIPTS}/reward_fn.py"
 
 # ----------------- Run dir layout (mirrors sft / simple) -----------------
+# RUN_NAME bumped from "simct_phi4mini" (v1, kept for comparison: GSM8K 86.9%)
+# to "simct_phi4mini_v2": span dim with SUM aggregation, first-token masking,
+#   no per-segment KL clamp, ALM-aligned LR/warmup.
+# to "simct_phi4mini_v3" (this run): same as v2 but span dim uses MEAN (not sum).
 EXP_NAME="01_cross_tokenizer_opd"
 METHOD="simct"
-RUN_NAME="simct_phi4mini"
+RUN_NAME="simct_phi4mini_v3"
 
 RUNS_ROOT="/root/workspace/models/runs"
 RUN_DIR="${RUNS_ROOT}/${EXP_NAME}/${METHOD}/${RUN_NAME}"
@@ -150,11 +154,11 @@ MAX_MODEL_LEN=$(( MAX_PROMPT_LEN + MAX_RESPONSE_LEN + 1 ))   # 8193
 # Used to be 8193 (one seq/micro-batch, lowest mem) before SPEED_TIER tuning.
 PPO_MAX_TOKEN_LEN_PER_GPU=${PPO_MAX_TOKEN_LEN_PER_GPU:-16384}
 
-ACTOR_LR=5e-7
+ACTOR_LR=2e-6
 LR_WARMUP_RATIO=0.05
-TOTAL_EPOCHS=1
+TOTAL_EPOCHS=2
 
-SAVE_FREQ=77                  # ckpts at step 77 and epoch-end (step 154) -> exactly 2 ckpts, 77 steps apart
+SAVE_FREQ=77                  # ckpts at step 77, 154, 231, 308 -> 4 ckpts across 2 epochs
 TEST_FREQ=-1                  # eval after merge, not in-loop
 
 ROLLOUT_TP=1
@@ -251,7 +255,7 @@ if [ "${TEACHER_LAYOUT}" = "shared" ]; then
     SIMPLE_TEACHER_NUM_GPUS_PER_ACTOR=0
     TRAIN_BATCH_SIZE=64
     PPO_MINI_BATCH_SIZE=64
-    EXPECTED_FINAL_STEP=154       # 9900 / 64 = 154 (floor)
+    EXPECTED_FINAL_STEP=308       # 9900 / 64 = 154 per epoch * 2 epochs = 308
     ROLLOUT_GPU_MEM_UTIL=${ROLLOUT_MEM_DEFAULT}
     TEACHER_GPU_MEM_UTIL=${TEACHER_MEM_DEFAULT}
     STUDENT_N_GPUS_PER_NODE=8
@@ -266,7 +270,7 @@ elif [ "${TEACHER_LAYOUT}" = "split" ]; then
     SIMPLE_TEACHER_NUM_GPUS_PER_ACTOR=1.0
     TRAIN_BATCH_SIZE=66
     PPO_MINI_BATCH_SIZE=66
-    EXPECTED_FINAL_STEP=150       # 9900 / 66 = 150
+    EXPECTED_FINAL_STEP=300       # 9900 / 66 = 150 per epoch * 2 epochs = 300
     ROLLOUT_GPU_MEM_UTIL=0.25
     TEACHER_GPU_MEM_UTIL=0.6
     STUDENT_N_GPUS_PER_NODE=$((N_GPUS - TEACHER_WORLD_SIZE))   # 6

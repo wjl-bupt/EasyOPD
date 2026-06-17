@@ -1,0 +1,25 @@
+{
+  "model": "global_step_231",
+  "model_path": "/root/workspace/models/runs/01_cross_tokenizer_opd/uld/uld_phi4mini/hf/global_step_231",
+  "served_model": "/root/workspace/models/runs/01_cross_tokenizer_opd/alm/alm_phi4mini/hf/global_step_77",
+  "dataset": "math500",
+  "metric": "Accuracy",
+  "score": 0.186,
+  "correct": 93,
+  "total_samples": 500,
+  "elapsed_seconds": 139.71176171302795,
+  "throughput_sps": 3.578796758908635,
+  "eval_mode": "0-shot chat (boxed)",
+  "truncated_count": 0,
+  "extraction_failed_count": 186,
+  "empty_output_count": 0,
+  "timestamp": "2026-06-16T22:05:51.280764",
+  "config": {
+    "base_url": "http://127.0.0.1:30000",
+    "max_concurrent": 256,
+    "max_new_tokens": 4096,
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "split": "test"
+  }
+}

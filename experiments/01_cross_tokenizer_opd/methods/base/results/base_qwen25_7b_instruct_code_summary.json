@@ -1,0 +1,12 @@
+{
+  "model_name": "base_qwen25_7b_instruct",
+  "model_path": "/root/workspace/models/Qwen2.5-7B-Instruct",
+  "results": {
+    "mbpp": {
+      "score": 0.664,
+      "accuracy": 66.4,
+      "correct": 332,
+      "total": 500
+    }
+  }
+}

@@ -90,18 +90,31 @@ def test_align_label_ids_with_spans_unalignable_returns_empty():
     assert segments == []
 
 
-def test_build_virtual_vocab_logits_adds_span_dimension():
+def test_build_virtual_vocab_logits_span_dim_with_sum_and_masking():
+    """Span segments get an extra span dimension (sum of self-logits) and
+    the first token's overlap position is masked to -1e9."""
     segments = [(0, 2, 0, 2)]
     student_logits = torch.zeros(2, 8)
     teacher_logits = torch.zeros(2, 9)
+    # student: overlap_ids=[1,2], label_ids=[4,5]
+    # student_logits[0, 1]=1.0 (overlap pos 0), student_logits[0, 2]=2.0 (overlap pos 1)
+    # student_logits[0, 4]=4.0 (self-logit for first token id=4)
+    # student_logits[1, 5]=6.0 (self-logit for second token id=5)
     student_logits[0, 1] = 1.0
     student_logits[0, 2] = 2.0
     student_logits[0, 4] = 4.0
     student_logits[1, 5] = 6.0
+    # teacher: overlap_ids=[3,4], label_ids=[6,7]
+    # teacher_logits[0, 3]=3.0 (overlap pos 0), teacher_logits[0, 4]=5.0 (overlap pos 1)
+    # teacher_logits[0, 6]=8.0 (self-logit for first token id=6)
+    # teacher_logits[1, 7]=10.0 (self-logit for second token id=7)
     teacher_logits[0, 3] = 3.0
     teacher_logits[0, 4] = 5.0
     teacher_logits[0, 6] = 8.0
     teacher_logits[1, 7] = 10.0
+
+    student_overlap_ids = torch.tensor([1, 2], dtype=torch.long)
+    teacher_overlap_ids = torch.tensor([3, 4], dtype=torch.long)
 
     student_virtual, teacher_virtual, is_span = build_virtual_vocab_logits(
         segments=segments,
@@ -109,16 +122,90 @@ def test_build_virtual_vocab_logits_adds_span_dimension():
         teacher_logits_aligned=teacher_logits,
         student_label_ids=[4, 5],
         teacher_label_ids=[6, 7],
+        student_overlap_ids=student_overlap_ids,
+        teacher_overlap_ids=teacher_overlap_ids,
+    )
+
+    # Shape: num_overlap(2) + num_spans(1) = 3
+    assert student_virtual.shape == teacher_virtual.shape == (1, 3)
+    assert is_span == [True]
+
+    # First-token masking: student label_ids[0]=4 is NOT in overlap_ids=[1,2],
+    # so no masking happens on student overlap. Teacher label_ids[0]=6 is NOT
+    # in teacher overlap_ids=[3,4], so no masking on teacher overlap either.
+    # Overlap values pass through unchanged.
+    assert torch.allclose(student_virtual[0, :2], torch.tensor([1.0, 2.0]))
+    assert torch.allclose(teacher_virtual[0, :2], torch.tensor([3.0, 5.0]))
+
+    # Span dim = SUM of self-logits: student 4.0+6.0=10.0, teacher 8.0+10.0=18.0
+    assert torch.allclose(student_virtual[0, 2], torch.tensor(10.0))
+    assert torch.allclose(teacher_virtual[0, 2], torch.tensor(18.0))
+
+
+def test_build_virtual_vocab_logits_first_token_masking():
+    """When first token IS in overlap, its overlap position is masked to -1e9."""
+    segments = [(0, 2, 0, 2)]
+    student_logits = torch.zeros(2, 8)
+    teacher_logits = torch.zeros(2, 9)
+    # student: overlap_ids=[1,2], label_ids=[1, 5]  (first token id=1 IS in overlap at pos 0)
+    student_logits[0, 1] = 7.0  # overlap pos 0 — will be masked
+    student_logits[0, 2] = 8.0  # overlap pos 1 — kept
+    student_logits[0, 1] = 7.0  # self-logit for first token (id=1)
+    student_logits[1, 5] = 6.0  # self-logit for second token (id=5)
+    # teacher: overlap_ids=[3,4], label_ids=[3, 7]  (first token id=3 IS in overlap at pos 0)
+    teacher_logits[0, 3] = 9.0  # overlap pos 0 — will be masked
+    teacher_logits[0, 4] = 5.0  # overlap pos 1 — kept
+    teacher_logits[0, 3] = 9.0  # self-logit for first token (id=3)
+    teacher_logits[1, 7] = 10.0  # self-logit for second token (id=7)
+
+    student_virtual, teacher_virtual, is_span = build_virtual_vocab_logits(
+        segments=segments,
+        student_logits_aligned=student_logits,
+        teacher_logits_aligned=teacher_logits,
+        student_label_ids=[1, 5],
+        teacher_label_ids=[3, 7],
         student_overlap_ids=torch.tensor([1, 2], dtype=torch.long),
         teacher_overlap_ids=torch.tensor([3, 4], dtype=torch.long),
     )
 
-    assert student_virtual.shape == teacher_virtual.shape == (1, 3)
+    assert student_virtual.shape == (1, 3)  # 2 overlap + 1 span
     assert is_span == [True]
-    assert torch.allclose(student_virtual[0, :2], torch.tensor([1.0, 2.0]))
-    assert torch.allclose(teacher_virtual[0, :2], torch.tensor([3.0, 5.0]))
-    assert torch.allclose(student_virtual[0, 2], torch.tensor(5.0))
-    assert torch.allclose(teacher_virtual[0, 2], torch.tensor(9.0))
+    # First token's overlap position is masked to -1e9
+    assert student_virtual[0, 0].item() == -1e9
+    assert teacher_virtual[0, 0].item() == -1e9
+    # Second overlap position is kept
+    assert student_virtual[0, 1].item() == 8.0
+    assert teacher_virtual[0, 1].item() == 5.0
+    # Span dim = sum: student 7.0+6.0=13.0, teacher 9.0+10.0=19.0
+    assert torch.allclose(student_virtual[0, 2], torch.tensor(13.0))
+    assert torch.allclose(teacher_virtual[0, 2], torch.tensor(19.0))
+
+
+def test_build_virtual_vocab_logits_one_to_one_segment():
+    """1:1 segments have no span dimension appended."""
+    segments = [(0, 1, 0, 1)]
+    student_logits = torch.zeros(1, 8)
+    teacher_logits = torch.zeros(1, 9)
+    student_logits[0, 1] = 7.0
+    student_logits[0, 2] = 8.0
+    teacher_logits[0, 3] = 11.0
+    teacher_logits[0, 4] = 12.0
+
+    student_virtual, teacher_virtual, is_span = build_virtual_vocab_logits(
+        segments=segments,
+        student_logits_aligned=student_logits,
+        teacher_logits_aligned=teacher_logits,
+        student_label_ids=[1],
+        teacher_label_ids=[3],
+        student_overlap_ids=torch.tensor([1, 2], dtype=torch.long),
+        teacher_overlap_ids=torch.tensor([3, 4], dtype=torch.long),
+    )
+
+    # No span segments → no span dim appended → shape is (1, num_overlap=2)
+    assert student_virtual.shape == teacher_virtual.shape == (1, 2)
+    assert is_span == [False]
+    assert torch.allclose(student_virtual[0], torch.tensor([7.0, 8.0]))
+    assert torch.allclose(teacher_virtual[0], torch.tensor([11.0, 12.0]))
 
 
 def test_register_simct_loss_registers_new_and_legacy_names():

@@ -1,0 +1,11 @@
+{
+  "model_name": "gkd_qwen25_1.5b_global_step_154",
+  "model_path": "/root/workspace/models/runs/06_general_opd/gkd/gkd_qwen25_1.5b/hf/global_step_154",
+  "results": {
+    "gsm8k": {
+      "accuracy": 0.1516300227445034,
+      "correct": 2,
+      "total": 1319
+    }
+  }
+}

@@ -495,7 +495,7 @@ class RayPPOTrainer:
         actor_loss_mode = config.actor_rollout_ref.actor.policy_loss.get("loss_mode", "vanilla")
         distillation_cfg = getattr(config, "distillation", None)
         distillation_enabled = bool(distillation_cfg is not None and distillation_cfg.get("enabled", False))
-        if actor_loss_mode in {"simple", "simct"} and distillation_enabled:
+        if actor_loss_mode in {"simple", "simct", "alm", "uld", "dskd"} and distillation_enabled:
             from easyopd.methods.simple.teacher_sidecar import EasyOPDSimpleTeacherSidecar
 
             self.simple_teacher_sidecar = EasyOPDSimpleTeacherSidecar(config)

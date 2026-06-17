@@ -1,0 +1,12 @@
+{
+  "model_name": "sft_phi4mini_global_step_78",
+  "model_path": "/root/workspace/models/runs/01_cross_tokenizer_opd/sft/sft_phi4mini/hf/global_step_78",
+  "results": {
+    "mbpp": {
+      "score": 0.574,
+      "accuracy": 57.4,
+      "correct": 287,
+      "total": 500
+    }
+  }
+}

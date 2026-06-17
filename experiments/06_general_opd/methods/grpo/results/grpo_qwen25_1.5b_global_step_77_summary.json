@@ -1,0 +1,11 @@
+{
+  "model_name": "grpo_qwen25_1.5b_global_step_77",
+  "model_path": "/root/workspace/models/runs/06_general_opd/grpo/grpo_qwen25_1.5b/hf/global_step_77",
+  "results": {
+    "gsm8k": {
+      "accuracy": 6.2926459438968925,
+      "correct": 83,
+      "total": 1319
+    }
+  }
+}

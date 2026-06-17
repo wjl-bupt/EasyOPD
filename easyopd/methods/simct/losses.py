@@ -6,6 +6,17 @@
 # distillation path. It intentionally reuses the EasyOPD `simple` teacher
 # sidecar, teacher lm_head and overlap-vocabulary singleton setup; only the
 # student/teacher alignment and loss construction differ.
+#
+# SimCT-v2 changes (vs original SimCT v1):
+#   1. Each aligned segment uses overlap-vocabulary KL plus a span dimension
+#      for multi-token segments. The span dimension aggregates each token's
+#      ground-truth logit using **mean**.
+#   2. First-token masking is **retained** to avoid double-counting the first
+#      token in both the overlap and span dimensions.
+#   3. The per-segment KL clamp (`simct_loss_clamp`) is removed; the global
+#      `simple_loss_clamp` in `verl/dp_actor.py` (10.0) still acts as a guard.
+#   4. Segment alignment (`align_label_ids_with_spans`) is unchanged and
+#      keeps the relaxed cumulative-text matching.
 
 from __future__ import annotations
 
@@ -161,6 +172,46 @@ def align_label_ids_with_spans(
 # Virtual common vocabulary logits
 # ---------------------------------------------------------------------------
 
+# Module-level lookup caches for overlap id -> position mapping.
+# Built once per unique overlap_ids tensor (keyed by data_ptr).
+_STUDENT_OVERLAP_ID2POS: dict[int, int] | None = None
+_TEACHER_OVERLAP_ID2POS: dict[int, int] | None = None
+_STUDENT_OVERLAP_PTR: int = 0
+_TEACHER_OVERLAP_PTR: int = 0
+
+
+def _get_overlap_id2pos(overlap_ids: torch.Tensor, cache_key: str) -> dict[int, int]:
+    """Get or build a {token_id -> position_in_overlap} lookup dict.
+
+    This replaces O(vocab_size) `(overlap_ids == token_id).nonzero()` calls
+    with O(1) dict lookups after a one-time O(overlap_size) build.
+    """
+    global _STUDENT_OVERLAP_ID2POS, _TEACHER_OVERLAP_ID2POS
+    global _STUDENT_OVERLAP_PTR, _TEACHER_OVERLAP_PTR
+
+    ptr = overlap_ids.data_ptr()
+    if cache_key == "student":
+        if _STUDENT_OVERLAP_ID2POS is not None and _STUDENT_OVERLAP_PTR == ptr:
+            return _STUDENT_OVERLAP_ID2POS
+        id2pos = {}
+        for pos, tid in enumerate(overlap_ids.tolist()):
+            if tid not in id2pos:  # keep first occurrence
+                id2pos[tid] = pos
+        _STUDENT_OVERLAP_ID2POS = id2pos
+        _STUDENT_OVERLAP_PTR = ptr
+        return id2pos
+    else:
+        if _TEACHER_OVERLAP_ID2POS is not None and _TEACHER_OVERLAP_PTR == ptr:
+            return _TEACHER_OVERLAP_ID2POS
+        id2pos = {}
+        for pos, tid in enumerate(overlap_ids.tolist()):
+            if tid not in id2pos:
+                id2pos[tid] = pos
+        _TEACHER_OVERLAP_ID2POS = id2pos
+        _TEACHER_OVERLAP_PTR = ptr
+        return id2pos
+
+
 def build_virtual_vocab_logits(
     segments: Sequence[tuple[int, int, int, int]],
     student_logits_aligned: torch.Tensor,
@@ -170,10 +221,22 @@ def build_virtual_vocab_logits(
     student_overlap_ids: torch.Tensor,
     teacher_overlap_ids: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, list[bool]]:
-    """Build SimCT virtual-vocabulary logits for aligned segments."""
+    """Build virtual-vocabulary logits for aligned segments.
+
+    For each segment the first logit position is projected to the shared
+    overlap vocabulary. For **span segments** (where either side covers more
+    than one token), an additional span dimension is appended whose value is
+    the **sum** of each token's logit for its own ground-truth id within the
+    span. The first token's overlap position is masked to ``-1e9`` to avoid
+    double-counting it in both the overlap and the span dimension.
+    """
     num_overlap = int(student_overlap_ids.numel())
     device = student_logits_aligned.device
     dtype = student_logits_aligned.dtype
+
+    # Build O(1) lookup tables for first-token masking (cached across calls)
+    stu_id2pos = _get_overlap_id2pos(student_overlap_ids, "student")
+    tea_id2pos = _get_overlap_id2pos(teacher_overlap_ids, "teacher")
 
     span_segment_indices = [
         idx
@@ -193,9 +256,21 @@ def build_virtual_vocab_logits(
         if student_segment_logits.numel() == 0 or teacher_segment_logits.numel() == 0:
             continue
 
-        student_overlap = student_segment_logits[0].index_select(0, student_overlap_ids)
-        teacher_overlap = teacher_segment_logits[0].index_select(0, teacher_overlap_ids)
+        student_overlap = student_segment_logits[0].index_select(0, student_overlap_ids).clone()
+        teacher_overlap = teacher_segment_logits[0].index_select(0, teacher_overlap_ids).clone()
         current_is_span = seg_idx in segment_to_span_dim
+
+        # First-token masking: mask the first token's position in overlap to
+        # avoid counting it twice (once in overlap, once in span dim).
+        if current_is_span:
+            first_stu_token = int(student_label_ids[stu_start])
+            first_tea_token = int(teacher_label_ids[tea_start])
+            stu_pos = stu_id2pos.get(first_stu_token)
+            if stu_pos is not None:
+                student_overlap[stu_pos] = -1e9
+            tea_pos = tea_id2pos.get(first_tea_token)
+            if tea_pos is not None:
+                teacher_overlap[tea_pos] = -1e9
 
         if num_spans > 0:
             student_span_dims = torch.full((num_spans,), -1e9, device=device, dtype=dtype)
@@ -203,14 +278,18 @@ def build_virtual_vocab_logits(
 
             if current_is_span:
                 span_dim = segment_to_span_dim[seg_idx]
+                # Span logit = MEAN of all tokens' logits for their own
+                # ground-truth ids within the span.
                 student_self_logits = []
                 for local_idx, token_id in enumerate(student_label_ids[stu_start:stu_end]):
                     student_self_logits.append(student_segment_logits[local_idx, int(token_id)])
                 teacher_self_logits = []
                 for local_idx, token_id in enumerate(teacher_label_ids[tea_start:tea_end]):
                     teacher_self_logits.append(teacher_segment_logits[local_idx, int(token_id)])
-                student_span_dims[span_dim] = torch.stack(student_self_logits).mean()
-                teacher_span_dims[span_dim] = torch.stack(teacher_self_logits).mean()
+                if student_self_logits:
+                    student_span_dims[span_dim] = torch.stack(student_self_logits).mean()
+                if teacher_self_logits:
+                    teacher_span_dims[span_dim] = torch.stack(teacher_self_logits).mean()
 
             student_row = torch.cat([student_overlap, student_span_dims], dim=0)
             teacher_row = torch.cat([teacher_overlap, teacher_span_dims], dim=0)
@@ -330,6 +409,9 @@ def compute_simct_xtok_logits_processor(
     total_span_segments = 0
     total_response_tokens = 0
     skipped_samples = 0
+    # Task 5: Collect per-segment KL values for debug logging
+    _debug_span_kls: list[float] = []
+    _debug_overlap_kls: list[float] = []
 
     for batch_idx in range(len(cu) - 1):
         sample_start, sample_end = int(cu[batch_idx]), int(cu[batch_idx + 1])
@@ -451,6 +533,7 @@ def compute_simct_xtok_logits_processor(
             )
 
         kl_per_segment = simple_losses._kl_div(student_virtual, teacher_virtual.detach(), direction)
+        # SimCT-v2: per-segment clamp removed; global simple_loss_clamp in dp_actor handles guarding.
         if kl_per_segment.numel() != len(is_span_segment):
             raise RuntimeError(
                 "[EasyOPD:simct] segment loss count mismatch: "
@@ -466,8 +549,30 @@ def compute_simct_xtok_logits_processor(
             if is_span_segment[seg_idx]:
                 span_positions[target_pos] = 1.0
 
+        # Task 5: Collect KL values per segment type for debug stats
+        if DEBUG_SIMCT:
+            for seg_idx_dbg, is_span_flag in enumerate(is_span_segment):
+                kl_val = float(kl_per_segment[seg_idx_dbg].item())
+                if is_span_flag:
+                    _debug_span_kls.append(kl_val)
+                else:
+                    _debug_overlap_kls.append(kl_val)
+
         total_segments += int(kl_per_segment.numel())
         total_span_segments += int(sum(1 for flag in is_span_segment if flag))
+
+    # Task 5: Debug log — compare span vs 1:1 segment KL magnitudes
+    if DEBUG_SIMCT and (_debug_span_kls or _debug_overlap_kls):
+        avg_span_kl = sum(_debug_span_kls) / max(len(_debug_span_kls), 1)
+        avg_overlap_kl = sum(_debug_overlap_kls) / max(len(_debug_overlap_kls), 1)
+        ratio = avg_span_kl / max(avg_overlap_kl, 1e-8)
+        logger.info(
+            "[EasyOPD:simct debug] KL stats: span_avg=%.4f (%d segs), "
+            "overlap_avg=%.4f (%d segs), ratio=%.2fx",
+            avg_span_kl, len(_debug_span_kls),
+            avg_overlap_kl, len(_debug_overlap_kls),
+            ratio,
+        )
 
     if total_response_tokens > 0 and total_segments == 0:
         logger.warning(
@@ -509,7 +614,16 @@ def compute_distillation_loss_simct_cross_tokenizer(
     model_output: dict,
     data,
 ) -> Tuple[torch.Tensor, dict[str, Any]]:
-    """Convert SimCT rmpad losses back to response layout and report metrics."""
+    """Convert SimCT rmpad losses back to response layout and report metrics.
+
+    SimCT-v2 metric notes:
+        * ``distillation/overlap_vocab_size`` reports the overlap vocabulary
+          size (== virtual vocab dim in v2; the span dimension is removed).
+        * ``distillation/simct_span_segments`` is preserved for backward
+          compatibility but now only counts span-shaped segments for
+          diagnostics; their KL contribution comes from pure overlap KL,
+          not a dedicated span dimension.
+    """
     from verl.utils.metric import AggregationType, Metric
     from verl.workers.utils.padding import no_padding_2_padding
 

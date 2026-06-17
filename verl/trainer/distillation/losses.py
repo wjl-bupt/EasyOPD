@@ -144,3 +144,33 @@ except Exception as _easyopd_simct_err:
     logger.debug(
         "Could not register EasyOPD simct loss: %s", _easyopd_simct_err
     )
+
+# ============ [EasyOPD:alm] Approximate Likelihood Matching (KDFlow port) ============
+try:
+    from easyopd.methods.alm.losses import register_alm_loss as _register_alm_loss
+    _register_alm_loss()
+except Exception as _easyopd_alm_err:
+    logger.debug(
+        "Could not register EasyOPD alm loss: %s", _easyopd_alm_err
+    )
+# ============ [EasyOPD:alm] End ============
+
+# ============ [EasyOPD:uld] Universal Logit Distillation (KDFlow port) ============
+try:
+    from easyopd.methods.uld.losses import register_uld_loss as _register_uld_loss
+    _register_uld_loss()
+except Exception as _easyopd_uld_err:
+    logger.debug(
+        "Could not register EasyOPD uld loss: %s", _easyopd_uld_err
+    )
+# ============ [EasyOPD:uld] End ============
+
+# ============ [EasyOPD:dskd] Dual-Space Knowledge Distillation (KDFlow port) ============
+try:
+    from easyopd.methods.dskd.losses import register_dskd_loss as _register_dskd_loss
+    _register_dskd_loss()
+except Exception as _easyopd_dskd_err:
+    logger.debug(
+        "Could not register EasyOPD dskd loss: %s", _easyopd_dskd_err
+    )
+# ============ [EasyOPD:dskd] End ============

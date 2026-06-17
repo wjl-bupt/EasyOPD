@@ -1,0 +1,12 @@
+{
+  "model_name": "simple_phi4mini_global_step_77",
+  "model_path": "/root/workspace/models/runs/01_cross_tokenizer_opd/simple/simple_phi4mini/hf/global_step_77",
+  "results": {
+    "mbpp": {
+      "score": 0.578,
+      "accuracy": 57.8,
+      "correct": 289,
+      "total": 500
+    }
+  }
+}

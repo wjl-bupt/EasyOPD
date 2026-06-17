@@ -1,0 +1,12 @@
+{
+  "model_name": "base_phi4mini",
+  "model_path": "/root/workspace/models/Phi-4-mini-instruct",
+  "results": {
+    "mbpp": {
+      "score": 0.566,
+      "accuracy": 56.599999999999994,
+      "correct": 283,
+      "total": 500
+    }
+  }
+}

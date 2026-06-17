@@ -135,7 +135,7 @@ class DataParallelPPOActor(BasePPOActor):
         """
         opsa_caller_requested_extra = (opsa_topk_k is not None) or (opsa_gather_indices is not None)
         simple_xtok_requested = (
-            self.config.policy_loss.get("loss_mode", "vanilla") in ("simple", "simct")
+            self.config.policy_loss.get("loss_mode", "vanilla") in ("simple", "simct", "alm", "uld", "dskd")
             and "teacher_hidden_states" in micro_batch
             and "teacher_input_ids" in micro_batch
             and "teacher_loss_mask" in micro_batch
@@ -269,7 +269,7 @@ class DataParallelPPOActor(BasePPOActor):
                         inplace_backward=inplace_backward,
                     )
 
-                    # ============ [EasyOPD:Simple/SimCT] Cross-tokenizer KD from full student logits ============
+                    # ============ [EasyOPD:Simple/SimCT/ALM/ULD/DSKD] Cross-tokenizer KD from full student logits ============
                     # Dispatch the per-token KD processor based on policy_loss.loss_mode.
                     #   * simple  -> easyopd.methods.simple.losses.compute_simple_xtok_logits_processor
                     #               returns Tensor[1, total_nnz] (per-token KL on overlap sub-vocab)
@@ -277,6 +277,12 @@ class DataParallelPPOActor(BasePPOActor):
                     #               returns dict with key "distillation_losses" -> Tensor[1, total_nnz]
                     #               (per-segment KL placed on the segment's first student token,
                     #                using span virtual-vocabulary logits — the SimCT algorithm).
+                    #   * alm     -> easyopd.methods.alm.losses.compute_alm_xtok_logits_processor
+                    #               returns dict; chunk-level binarised f-divergence KD.
+                    #   * uld     -> easyopd.methods.uld.losses.compute_uld_xtok_logits_processor
+                    #               returns dict; per-token Wasserstein-1 KD over sorted probs.
+                    #   * dskd    -> easyopd.methods.dskd.losses.compute_dskd_xtok_logits_processor
+                    #               returns dict; dual-space (t2s + s2t) projector KD.
                     # Previously this site hard-coded the simple processor regardless of
                     # loss_mode, which silently turned `loss_mode=simct` into a simple-KD
                     # rerun. The dispatch below restores the intended behaviour.
@@ -286,6 +292,24 @@ class DataParallelPPOActor(BasePPOActor):
                             from easyopd.methods.simct.losses import (
                                 compute_simct_xtok_logits_processor as _xtok_processor,
                             )
+                        elif _xtok_loss_mode == "alm":
+                            # [EasyOPD:alm]
+                            from easyopd.methods.alm.losses import (
+                                compute_alm_xtok_logits_processor as _xtok_processor,
+                            )
+                            # [EasyOPD:alm] End
+                        elif _xtok_loss_mode == "uld":
+                            # [EasyOPD:uld]
+                            from easyopd.methods.uld.losses import (
+                                compute_uld_xtok_logits_processor as _xtok_processor,
+                            )
+                            # [EasyOPD:uld] End
+                        elif _xtok_loss_mode == "dskd":
+                            # [EasyOPD:dskd]
+                            from easyopd.methods.dskd.losses import (
+                                compute_dskd_xtok_logits_processor as _xtok_processor,
+                            )
+                            # [EasyOPD:dskd] End
                         else:
                             from easyopd.methods.simple.losses import (
                                 compute_simple_xtok_logits_processor as _xtok_processor,
@@ -332,7 +356,7 @@ class DataParallelPPOActor(BasePPOActor):
                             seqlen=seqlen,
                         )
                         simple_xtok_loss = simple_xtok_full.squeeze(-1)[:, -response_length - 1 : -1]
-                    # ============ [EasyOPD:Simple/SimCT] End ============
+                    # ============ [EasyOPD:Simple/SimCT/ALM/ULD/DSKD] End ============
 
                     # compute entropy
                     if calculate_entropy:
@@ -625,7 +649,7 @@ class DataParallelPPOActor(BasePPOActor):
             if "ref_log_prob" not in select_keys:
                 select_keys.append("ref_log_prob")
         # [EasyOPD:Simple] Also include ref_log_prob for simple KD loss
-        if self.config.policy_loss.get("loss_mode", "vanilla") in ("simple", "simct") and "ref_log_prob" in data.batch.keys():
+        if self.config.policy_loss.get("loss_mode", "vanilla") in ("simple", "simct", "alm", "uld", "dskd") and "ref_log_prob" in data.batch.keys():
             if "ref_log_prob" not in select_keys:
                 select_keys.append("ref_log_prob")
         if "base_log_prob" in data.batch.keys():
@@ -642,7 +666,7 @@ class DataParallelPPOActor(BasePPOActor):
         # ============ [EasyOPD] End ============
 
         # ============ [EasyOPD:Simple] Include cross-tokenizer teacher sidecar fields ============
-        if self.config.policy_loss.get("loss_mode", "vanilla") in ("simple", "simct"):
+        if self.config.policy_loss.get("loss_mode", "vanilla") in ("simple", "simct", "alm", "uld", "dskd"):
             for key in ("teacher_hidden_states", "teacher_input_ids", "teacher_loss_mask"):
                 if key in data.non_tensor_batch.keys():
                     non_tensor_select_keys.append(key)
@@ -749,7 +773,7 @@ class DataParallelPPOActor(BasePPOActor):
                     if self.config.get("opsa_enable", False) and "opsa_teacher_topk_indices" in model_inputs:
                         opsa_gather_indices = model_inputs["opsa_teacher_topk_indices"]
                     simple_xtok_requested = (
-                        self.config.policy_loss.get("loss_mode", "vanilla") in ("simple", "simct")
+                        self.config.policy_loss.get("loss_mode", "vanilla") in ("simple", "simct", "alm", "uld", "dskd")
                         and "teacher_hidden_states" in model_inputs
                         and "teacher_input_ids" in model_inputs
                         and "teacher_loss_mask" in model_inputs
@@ -1121,7 +1145,7 @@ class DataParallelPPOActor(BasePPOActor):
                     # ============ [EasyOPD:OPSA] End ============
 
                     # ============ [EasyOPD:Simple/SimCT] Cross-tokenizer KD loss ============
-                    if loss_mode in ("simple", "simct"):
+                    if loss_mode in ("simple", "simct", "alm", "uld", "dskd"):
                         if simple_xtok_loss is None:
                             raise RuntimeError(
                                 f"[EasyOPD:{loss_mode}] teacher sidecar fields were not available in actor forward; "
