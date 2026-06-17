@@ -142,10 +142,12 @@ outputs
 
 # experiment data and models
 experiments/**/data*/
+experiments/**/eval_data/
 experiments/**/teacher_sft_data/
 experiments/**/checkpoints/
 experiments/**/*_details.json
 experiments/**/logs/
+experiments/**/predictions.jsonl
 
 # EasyOPD.pdf (binary)
 EasyOPD.pdf
