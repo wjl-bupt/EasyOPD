@@ -134,8 +134,10 @@ class DataParallelPPOActor(BasePPOActor):
         treat the absence of these keys as "use per-token mixed KL fallback".
         """
         opsa_caller_requested_extra = (opsa_topk_k is not None) or (opsa_gather_indices is not None)
+        _policy_loss_cfg = getattr(self.config, "policy_loss", None)
+        _loss_mode = _policy_loss_cfg.get("loss_mode", "vanilla") if _policy_loss_cfg is not None else "vanilla"
         simple_xtok_requested = (
-            self.config.policy_loss.get("loss_mode", "vanilla") in ("simple", "simct", "alm", "uld", "dskd")
+            _loss_mode in ("simple", "simct", "alm", "uld", "dskd")
             and "teacher_hidden_states" in micro_batch
             and "teacher_input_ids" in micro_batch
             and "teacher_loss_mask" in micro_batch
