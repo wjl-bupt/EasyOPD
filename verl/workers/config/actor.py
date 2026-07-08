@@ -38,7 +38,9 @@ class SelfDistillationConfig(BaseConfig):
     Args:
         full_logit_distillation (bool): Whether to use full-logit KL distillation.
         alpha (float): KL interpolation coefficient. 0.0=forward KL, 1.0=reverse KL, in-between=JSD.
-        gamma (float): Weight applied to the SDPO loss.
+        gamma (float): Weight on the self-distillation loss for Vision-OPD
+            (``policy_loss = vopd_loss * gamma + grpo_loss``). NOT used by SDPO
+            (``loss_mode='sdpo'``), whose loss has no GRPO-fallback term.
         success_reward_threshold (float): Minimum sequence reward to be considered successful.
         teacher_regularization (str): Teacher regularization mode. Options: "ema", "trust-region", "progressive".
         teacher_update_rate (float): EMA update rate for teacher weights.
@@ -71,19 +73,21 @@ class SelfDistillationConfig(BaseConfig):
     dont_reprompt_on_self_success: bool = False
     remove_thinking_from_demonstration: bool = False
     is_clip: Optional[float] = None
+    # Templates mirror lasgroup/SDPO actor.yaml exactly (YAML `|-` strips the
+    # trailing newline), so the self-teacher reprompt text is byte-faithful.
     reprompt_template: str = (
         "{prompt}{solution}{feedback}\n\n"
-        "Correctly solve the original question.\n"
+        "Correctly solve the original question."
     )
     solution_template: str = (
         "\n"
         "Correct solution:\n\n"
-        "{successful_previous_attempt}\n\n"
+        "{successful_previous_attempt}"
     )
     feedback_template: str = (
         "\n"
         "The following is feedback from your unsuccessful earlier attempt:\n\n"
-        "{feedback_raw}\n\n"
+        "{feedback_raw}"
     )
     include_environment_feedback: bool = False
     environment_feedback_only_without_solution: bool = False

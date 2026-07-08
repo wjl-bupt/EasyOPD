@@ -1252,6 +1252,40 @@ class RayPPOTrainer:
         return None
     # ============ [EasyOPD] End ============
 
+    # ============ [EasyOPD:SDPO] Build reprompt self-teacher batch ============
+    def _maybe_build_sdpo_batch(self, batch, reward_tensor):
+        """Build the SDPO self-teacher batch by reprompting rollouts.
+
+        For each failed rollout, inject a correct demonstration from a
+        successful rollout in the same prompt group (uid) and/or environment
+        feedback, then append the ORIGINAL response so the live self-teacher
+        re-scores the student's own tokens in hindsight (paper Eq. 1).
+
+        The heavy lifting lives in
+        ``easyopd.methods.sdpo.core.build_sdpo_teacher_inputs``; here we only
+        wire the verl batch / tokenizer in and wrap the result for
+        ``batch.union()``.
+        """
+        from verl import DataProto
+        from easyopd.methods.sdpo.core import build_sdpo_teacher_inputs
+
+        self_distillation_cfg = self.config.actor_rollout_ref.actor.get("self_distillation", None)
+        if self_distillation_cfg is None:
+            return None
+
+        result = build_sdpo_teacher_inputs(
+            batch=batch,
+            reward_tensor=reward_tensor,
+            cfg=self_distillation_cfg,
+            tokenizer=self.tokenizer,
+            apply_chat_template_kwargs=self.config.data.get("apply_chat_template_kwargs", {}) or {},
+        )
+        if result is None:
+            return None
+        tensors, metrics = result
+        return DataProto.from_dict(tensors=tensors), metrics
+    # ============ [EasyOPD:SDPO] End ============
+
     # ============ [EasyOPD:OPSA] Build self-distillation batch with privileged contexts ============
     def _maybe_build_opsa_batch(self, batch):
         """Build teacher inputs with privileged contexts for OPSA self-distillation.
@@ -2422,6 +2456,25 @@ class RayPPOTrainer:
                         else:
                             batch.batch["token_level_rewards"] = batch.batch["token_level_scores"]
 
+                        # ============ [EasyOPD] Rollout correction (IS weights / rejection sampling) ============
+                        # Faithful to lasgroup/SDPO: when algorithm.rollout_correction
+                        # is configured (e.g. rollout_is=token), compute token-level
+                        # importance-sampling weights from (old_log_probs vs rollout_log_probs)
+                        # and add them to the batch. The SDPO loss multiplies the per-token
+                        # distillation loss by these weights (correcting the
+                        # training-vs-rollout policy mismatch).
+                        rollout_corr_config = self.config.algorithm.get("rollout_correction", None)
+                        if rollout_corr_config is not None and "rollout_log_probs" in batch.batch:
+                            from verl.trainer.ppo.rollout_corr_helper import (
+                                compute_rollout_correction_and_add_to_batch,
+                            )
+
+                            batch, is_metrics = compute_rollout_correction_and_add_to_batch(
+                                batch, rollout_corr_config
+                            )
+                            metrics.update(is_metrics)
+                        # ============ [EasyOPD] End ============
+
                         # compute advantages, executed on the driver process
 
                         norm_adv_by_std_in_grpo = self.config.algorithm.get(
@@ -2470,6 +2523,14 @@ class RayPPOTrainer:
                                 vopd_batch_data, vopd_metrics = vopd_result
                                 batch = batch.union(vopd_batch_data)
                                 metrics.update(vopd_metrics)
+                        # ============ [EasyOPD:SDPO] Build SDPO reprompt self-teacher batch ============
+                        elif _resolved_lm == "sdpo":
+                            sdpo_result = self._maybe_build_sdpo_batch(batch, reward_tensor)
+                            if sdpo_result is not None:
+                                sdpo_batch_data, sdpo_pre_metrics = sdpo_result
+                                batch = batch.union(sdpo_batch_data)
+                                metrics.update(sdpo_pre_metrics)
+                        # ============ [EasyOPD:SDPO] End ============
                         # ============ [EasyOPD] End ============
 
                         # ============ [EasyOPD] Context distillation - experience injection (OPCD) ============

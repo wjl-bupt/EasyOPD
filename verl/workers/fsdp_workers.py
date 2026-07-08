@@ -695,6 +695,46 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 self.config.ref.use_fused_kernels = use_fused_kernels
             self.ref_policy = DataParallelPPOActor(config=self.config.ref, actor_module=self.ref_module_fsdp)
 
+        # ============ [EasyOPD:SDPO] Build the EMA self-teacher module ============
+        # Faithful to lasgroup/SDPO: SDPO needs a SEPARATE self-teacher module
+        # (initialised from the reference / base model) that is EMA-updated towards
+        # the policy each optimizer step. EasyOPD does not enable the reference
+        # worker for SDPO (no KL loss), so we build a dedicated teacher inside the
+        # actor worker here and hand it to the actor. It is offloaded after build
+        # and (re)loaded around `update_actor`.
+        self.sdpo_teacher_module_fsdp = None
+        if self._is_actor:
+            sdpo_sd_cfg = self.config.actor.get("self_distillation", None)
+            sdpo_loss_mode = self.config.actor.policy_loss.get("loss_mode", "vanilla")
+            if sdpo_sd_cfg is not None and sdpo_loss_mode == "sdpo":
+                teacher_reg = sdpo_sd_cfg.get("teacher_regularization", "ema")
+                if teacher_reg in ("ema", "trust-region", "progressive"):
+                    if self.rank == 0:
+                        print(f"[EasyOPD:SDPO] building EMA self-teacher from: {self.config.model.path}")
+                    teacher_local_path = copy_to_local(self.config.model.path, use_shm=use_shm)
+                    # Reuse the ref FSDP config (bf16, param_offload) for the teacher.
+                    teacher_fsdp_config = omega_conf_to_dataclass(self.config.ref.fsdp_config)
+                    self.sdpo_teacher_module_fsdp = self._build_model_optimizer(
+                        model_path=teacher_local_path,
+                        fsdp_config=teacher_fsdp_config,
+                        optim_config=None,
+                        override_model_config=override_model_config,
+                        use_remove_padding=use_remove_padding,
+                        use_fused_kernels=use_fused_kernels,
+                        trust_remote_code=self.config.model.get("trust_remote_code", False),
+                        use_liger=self.config.model.get("use_liger", False),
+                        role="ref",
+                    )[0]
+                    self.sdpo_teacher_module_fsdp.eval()
+                    self.actor.teacher_module = self.sdpo_teacher_module_fsdp
+                    # The teacher is built with role="ref", which uses FSDP-native
+                    # CPUOffload (offload_params=True): its params live on CPU and are
+                    # auto-gathered to GPU during the (no-grad) teacher forward, so no
+                    # manual load/offload is needed (mirrors the reference's
+                    # ref_module_fsdp-as-teacher behaviour).
+                    log_gpu_memory_usage("After build SDPO teacher during init", logger=logger)
+        # ============ [EasyOPD:SDPO] End ============
+
         if self._is_actor:
             self.flops_counter = FlopsCounter(self.actor_model_config)
             self.checkpoint_manager = FSDPCheckpointManager(
@@ -726,6 +766,9 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             load_fsdp_model_to_gpu(self.actor_module_fsdp)
         if self._is_offload_optimizer:
             load_fsdp_optimizer(optimizer=self.actor_optimizer, device_id=get_device_id())
+        # [EasyOPD:SDPO] The EMA self-teacher (role="ref") is FSDP-CPUOffload-managed:
+        # its params auto-gather to GPU during the teacher forward and reshard after.
+        # No manual load is required here.
 
         with self.ulysses_sharding_manager:
             data = data.to("cpu")  # data will to device with each micro batch on actor.update_policy
@@ -758,6 +801,8 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         if self._is_offload_optimizer:
             offload_fsdp_optimizer(optimizer=self.actor_optimizer)
             log_gpu_memory_usage("After offload actor optimizer during update_actor", logger=logger)
+        # [EasyOPD:SDPO] No manual teacher offload: FSDP-native CPUOffload keeps the
+        # self-teacher params on CPU between forwards.
 
         return output
 

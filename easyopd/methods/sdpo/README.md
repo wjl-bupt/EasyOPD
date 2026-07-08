@@ -1,121 +1,77 @@
-# SDPO: Self-Distilled Policy Optimization
+# SDPO — Self-Distillation Policy Optimization
 
-## Method Overview
+> Paper: [Reinforcement Learning via Self-Distillation](https://arxiv.org/abs/2601.20802)
+> (Hübotter et al., 2026) · Code: https://github.com/lasgroup/SDPO
 
-**Paper:** [Reinforcement Learning via Self-Distillation](https://arxiv.org/abs/2601.20802) (Hübotter et al., 2026)
-
-**Code:** [https://github.com/lasgroup/SDPO](https://github.com/lasgroup/SDPO)
-
-SDPO (Self-Distilled Policy Optimization) augments on-policy reinforcement learning with self-distillation from the model's own high-reward trajectories. Unlike traditional knowledge distillation that requires an external teacher model, SDPO uses the **current model conditioned on feedback** as a self-teacher.
-
-### Core Idea
-
-1. **On-policy rollout**: The student model generates multiple responses per prompt.
-2. **Identify successes**: Responses exceeding a reward threshold are marked as successful demonstrations.
-3. **Reprompting**: For each sample, construct a "teacher prompt" that includes:
-   - The original question
-   - A successful demonstration from the same prompt group
-   - (Optional) Environment feedback from failed attempts
-4. **Self-distillation**: The model conditioned on this enriched prompt acts as a self-teacher. Its next-token predictions are distilled back into the policy using a generalized JSD loss.
-5. **EMA teacher**: The teacher model weights are maintained as an EMA of the student.
-
-### Key Innovation
-
-SDPO converts tokenized feedback into a **dense learning signal** without any external teacher or explicit reward model. It leverages the model's ability to retrospectively identify its own mistakes in-context.
-
-## Modified verl Files
-
-| File | Modification | Reason |
-|------|-------------|--------|
-| `verl/trainer/ppo/core_algos.py` | Add `compute_self_distillation_loss` function | Core SDPO loss computation (JSD with IS correction) |
-| `verl/workers/config/actor.py` | Add `SelfDistillationConfig` dataclass | Configuration for self-distillation parameters |
-| `verl/workers/actor/dp_actor.py` | Add self-distillation forward pass in `update_policy` | Teacher forward + distillation loss in training loop |
-| `verl/trainer/ppo/ray_trainer.py` | Add `_maybe_build_self_distillation_batch` method | Build teacher prompts from demonstrations/feedback |
-
-## Configuration Parameters
-
-### `actor.policy_loss`
-- `loss_mode: "sdpo"` — Enables self-distillation mode
-
-### `actor.self_distillation`
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `full_logit_distillation` | `True` | Use full-logit KL distillation |
-| `alpha` | `0.5` | KL interpolation: 0.0=forward KL, 1.0=reverse KL, 0.5=JSD |
-| `success_reward_threshold` | `1.0` | Minimum reward to be considered successful |
-| `teacher_regularization` | `"ema"` | Teacher mode: "ema" or "trust-region" |
-| `teacher_update_rate` | `0.05` | EMA update rate for teacher weights |
-| `distillation_topk` | `100` | Top-k logits for distillation (None = full vocab) |
-| `distillation_add_tail` | `True` | Add tail bucket for top-k distillation |
-| `is_clip` | `2.0` | IS ratio clip value (None disables IS) |
-| `max_reprompt_len` | `10240` | Maximum reprompted prompt length |
-| `reprompt_truncation` | `"right"` | Truncation method for reprompted prompts |
-| `dont_reprompt_on_self_success` | `True` | Don't use sample's own success as demonstration |
-| `remove_thinking_from_demonstration` | `True` | Remove `<think>` tags from demonstrations |
-| `include_environment_feedback` | `True` | Include environment feedback in reprompting |
-| `environment_feedback_only_without_solution` | `True` | Only use feedback when no solution available |
-
-## Reproduction Steps
-
-1. **Data preparation:**
-   ```bash
-   python data/preprocess.py --data_source <DATASET_PATH>
-   ```
-
-2. **Run training:**
-   ```bash
-   bash examples/sdpo/run_sdpo.sh
-   ```
-
-3. **Key hyperparameters to tune:**
-   - `alpha`: 0.5 (JSD) works well in most cases
-   - `distillation_topk`: 100 (reduces memory, maintains quality)
-   - `is_clip`: 2.0 (stabilizes training)
-   - `teacher_update_rate`: 0.05 (slow EMA for stable teacher)
-
-## Experimental Results
-
-| Benchmark | GRPO (baseline) | SDPO |
-|-----------|----------------|------|
-| Chemistry (1h) | ~45% | ~55% |
-| Chemistry (5h) | ~52% | ~60% |
-| LiveCodeBench v6 | ~25% | ~32% |
-
-*Results from the paper using Olmo3-7B-Instruct, avg@16.*
-
-## Architecture Diagram
+SDPO augments on-policy RL (GRPO) with **self-distillation**: for each prompt the
+policy samples a *group* of rollouts; a failed rollout is reprompted with a
+correct demonstration from a successful rollout in the **same group** (and/or
+environment feedback), and an **EMA copy of the policy** (the **self-teacher**
+`π̃(·|x, f)`, initialised from the base model and EMA-updated towards the policy
+each step) re-scores the failed rollout's original response under that
+feedback-informed context. The student `π(·|x)` is distilled towards the
+stop-gradient self-teacher (paper Eq. 1):
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    SDPO Training Loop                     │
-├─────────────────────────────────────────────────────────┤
-│                                                          │
-│  1. Student generates N responses per prompt             │
-│     ┌──────────┐                                        │
-│     │ Student  │ ──→ [response_1, ..., response_N]      │
-│     └──────────┘                                        │
-│                                                          │
-│  2. Reward function scores responses                     │
-│     reward_i >= threshold → "successful demonstration"   │
-│                                                          │
-│  3. Build teacher prompt (reprompting)                   │
-│     ┌─────────────────────────────────────────┐         │
-│     │ Original Question                        │         │
-│     │ + Successful Demonstration (if any)      │         │
-│     │ + Environment Feedback (if available)    │         │
-│     └─────────────────────────────────────────┘         │
-│                                                          │
-│  4. Self-teacher forward pass                            │
-│     ┌──────────────┐                                    │
-│     │ EMA Teacher  │ ──→ teacher_logits                 │
-│     └──────────────┘                                    │
-│                                                          │
-│  5. Compute SDPO loss                                    │
-│     L = JSD_alpha(student_logits, teacher_logits)        │
-│       × IS_correction × self_distillation_mask           │
-│                                                          │
-│  6. Update student + EMA teacher                         │
-│     θ_teacher ← (1-τ) × θ_teacher + τ × θ_student      │
-│                                                          │
-└─────────────────────────────────────────────────────────┘
+L_SDPO = Σ_t D_JSD^alpha( π(·|x, y_<t) ‖ stopgrad(π̃(·|x, f, y_<t)) )
 ```
+
+`alpha` interpolates forward/reverse KL (0.5 = symmetric JSD, paper-recommended
+for stability). **This is a faithful reimplementation of the lasgroup/SDPO
+reference**: samples without a usable self-teacher contribute **zero gradient**
+(no GRPO fallback), and the per-token distillation loss is multiplied by
+token-level rollout-correction IS weights.
+
+## Files
+
+| File | Contents |
+|------|----------|
+| `core.py` | `compute_sdpo_self_distillation_loss` (full-logit / top-K generalized-JSD, IS clip, rollout-IS weights), `build_reprompt_text`, `select_demonstration`, `compute_ema_update`, `build_sdpo_teacher_inputs` (reprompt teacher batch), `compute_sdpo_actor_loss` (EMA-teacher forward + loss, no fallback), `compute_sdpo_loss` (hook wrapper), `remove_thinking_from_text`, `sequence_rewards` |
+| `hooks.py` | `SDPOLossHook` (LossHook), `SDPOTeacherSidecarHook` (TeacherSidecarHook) |
+| `__init__.py` | `@register_method("sdpo")` + `SDPOMethod` metadata |
+
+## verl touchpoints (`# [EasyOPD:SDPO]`)
+
+- `verl/workers/actor/dp_actor.py` — SDPO loss branch (`compute_sdpo_actor_loss`),
+  `_forward_micro_batch(module=...)` for the teacher forward, `_update_teacher`
+  (EMA), and `teacher_module` field.
+- `verl/workers/fsdp_workers.py` — builds the EMA self-teacher module for SDPO
+  (role="ref", FSDP CPUOffload), assigned to `self.actor.teacher_module`.
+- `verl/trainer/ppo/ray_trainer.py` — `_maybe_build_sdpo_batch` builds the
+  reprompt self-teacher batch after reward; rollout correction computes
+  `rollout_is_weights` and adds them to the batch.
+- `verl/trainer/ppo/rollout_corr_helper.py` — rollout-correction IS weights
+  (training-vs-rollout policy mismatch), matching the reference.
+
+## Implementation note: logit-level top-K distillation
+
+This implementation uses the paper-default **logit-level top-K** generalized-JSD
+(reference `full_logit_distillation=True`, `distillation_topk=100`): the
+self-teacher is gathered at the **student's** top-K vocab indices (+ a tail
+bucket) and the JSD is computed over that support. A token-level fallback (reverse
+KL on chosen tokens) is used only when top-K extraction is unavailable (e.g.
+under ulysses sequence parallelism).
+
+## Usage
+
+```python
+from easyopd import EasyOPD
+m = EasyOPD.from_hparams("sdpo")          # default config: easyopd/config/sdpo.yaml
+```
+
+Training (single 8-GPU node):
+
+```bash
+bash experiments/04_self_opd/methods/sdpo/launch.sh
+# or the example launcher:
+bash examples/sdpo/run_sdpo.sh
+```
+
+Key knobs (under `actor_rollout_ref.actor.self_distillation`): `alpha`,
+`full_logit_distillation`, `distillation_topk`, `distillation_add_tail`,
+`is_clip`, `success_reward_threshold`, `teacher_regularization` (`ema`),
+`teacher_update_rate`, `dont_reprompt_on_self_success`,
+`remove_thinking_from_demonstration`, `include_environment_feedback`,
+`max_reprompt_len`. Rollout correction is configured under
+`algorithm.rollout_correction` (`rollout_is=token`, `rollout_is_threshold=2.0`).
+Requires `actor_rollout_ref.rollout.n > 1`.

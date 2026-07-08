@@ -73,9 +73,9 @@ training:
     environment_feedback_only_without_solution: true
 
     # Reprompting template
-    reprompt_template: "{prompt}{solution}{feedback}\n\nCorrectly solve the original question.\n"
-    solution_template: "\nCorrect solution:\n\n{successful_previous_attempt}\n\n"
-    feedback_template: "\nThe following is feedback from your unsuccessful earlier attempt:\n\n{feedback_raw}\n\n"
+    reprompt_template: "{prompt}{solution}{feedback}\n\nCorrectly solve the original question."
+    solution_template: "\nCorrect solution:\n\n{successful_previous_attempt}"
+    feedback_template: "\nThe following is feedback from your unsuccessful earlier attempt:\n\n{feedback_raw}"
 
   # Rollout correction (optional, for off-policy correction)
   rollout_correction:

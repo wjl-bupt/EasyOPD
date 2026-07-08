@@ -56,6 +56,89 @@ import pandas as pd
 from vllm import LLM, SamplingParams
 from verl.utils.reward_score.math import compute_score as math_compute_score
 from verl.utils.reward_score.gsm8k import compute_score as gsm8k_compute_score
+import re as _re
+
+def mcq_compute_score(response, ground_truth):
+    """SciKnowEval MCQ scoring — faithful to lasgroup/SDPO ``feedback/mcq.py``.
+
+    Strict exact match: the stripped content of the LAST ``<answer>...</answer>``
+    block must equal the ground-truth option string (e.g. "A"). Mirrors the
+    training reward (``reward_fn.py:mcq_score``) so eval numbers are comparable to
+    the SDPO reference.
+    """
+    if response is None:
+        return 0.0
+    answer = str(response).split("<answer>")[-1]
+    answer = answer.split("</answer>")[0]
+    answer = answer.strip()
+    return float(answer == str(ground_truth))
+
+def tooluse_compute_score(response, ground_truth):
+    """Tool-use scoring — faithful to feedback/tooluse.py: correct iff the multiset
+    of predicted actions (Action:) and the merged Action-Input JSON both match GT."""
+    if response is None:
+        return 0.0
+    from collections import Counter as _Counter
+    try:
+        gt_list = json.loads(ground_truth) if isinstance(ground_truth, str) else ground_truth
+    except Exception:
+        return 0.0
+    if not isinstance(gt_list, list):
+        return 0.0
+    try:
+        gt_actions = [item["Action"] for item in gt_list]
+    except Exception:
+        return 0.0
+    gt_inputs = {}
+    for item in gt_list:
+        ai = item.get("Action_Input")
+        try:
+            parsed = json.loads(ai) if isinstance(ai, str) else (ai or {})
+        except Exception:
+            parsed = {}
+        if parsed:
+            gt_inputs.update(parsed)
+    pred_actions = _re.findall(r"Action:\\s*(\\w+)", response)
+    pred_inputs = {}
+    for block in _re.findall(r"Action Input:\\s*({.*?})", response, _re.DOTALL):
+        try:
+            pred_inputs.update(json.loads(block))
+        except Exception:
+            pass
+    return float(_Counter(pred_actions) == _Counter(gt_actions) and pred_inputs == gt_inputs)
+
+def boxed_compute_score(response, ground_truth):
+    """Boxed-answer math scoring matching the boxed prompt (used for gsm8k whose
+    answers here are in boxed{}, not '#### n'): extract the last boxed{...} and
+    compare to ground_truth (exact, then numeric)."""
+    if response is None:
+        return 0.0
+    s = str(response)
+    key = chr(92) + "boxed{"  # literal backslash-boxed{ without source escaping
+    idx = s.rfind(key)
+    if idx < 0:
+        return 0.0
+    i = idx + len(key)
+    depth = 1
+    buf = []
+    while i < len(s) and depth > 0:
+        c = s[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                break
+        buf.append(c)
+        i += 1
+    pred = "".join(buf).strip()
+    gt = str(ground_truth).strip()
+    if pred == gt:
+        return 1.0
+    try:
+        return 1.0 if abs(float(pred.replace(",", "")) - float(gt.replace(",", ""))) < 1e-6 else 0.0
+    except Exception:
+        return 0.0
 
 # Read config from command line args
 config_file = sys.argv[1]
@@ -85,6 +168,13 @@ os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 df = pd.read_parquet(eval_data_path)
 prompts = df["prompt"].tolist()
 reward_model_data = df["reward_model"].tolist()
+
+# math/gsm8k prompts are pre-templated strings; sciknoweval/chemistry prompts are
+# chat-message lists -> apply the model's chat template to turn them into text.
+if len(prompts) > 0 and not isinstance(prompts[0], str):
+    from transformers import AutoTokenizer
+    _eval_tok = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    prompts = [_eval_tok.apply_chat_template([dict(m) for m in list(p)], tokenize=False, add_generation_prompt=True) for p in prompts]
 
 # Select only this shard's data
 shard_prompts = [prompts[i] for i in shard_indices]
@@ -122,7 +212,13 @@ for i, output in enumerate(outputs):
     if benchmark_name in ("math500", "math_hard"):
         score = math_compute_score(response, ground_truth)
     elif benchmark_name == "gsm8k":
-        score = gsm8k_compute_score(response, ground_truth)
+        # This gsm8k dataset uses \boxed{} answers (not "#### n"), so score with the
+        # boxed extractor to stay consistent with the boxed training reward.
+        score = boxed_compute_score(response, ground_truth)
+    elif benchmark_name in ("chemistry", "sciknoweval", "biology", "material", "physics"):
+        score = mcq_compute_score(response, ground_truth)
+    elif benchmark_name == "tooluse":
+        score = tooluse_compute_score(response, ground_truth)
     else:
         score = 0.0
     correct += score
@@ -354,6 +450,14 @@ def main():
             eval_path = os.path.join(args.data_dir, "gsm8k_eval.parquet")
         elif bench == "math_hard":
             eval_path = os.path.join(args.data_dir, "math_hard_eval.parquet")
+        elif bench in ("chemistry", "sciknoweval"):
+            eval_path = os.path.join(args.data_dir, "chemistry_eval.parquet")
+        elif bench in ("biology", "material", "physics"):
+            # Other SciKnowEval domains (same MCQ format/reward as chemistry).
+            eval_path = os.path.join(args.data_dir, f"{bench}_eval.parquet")
+        elif bench == "tooluse":
+            # Agentic Action/Action-Input task (scored by tooluse_compute_score).
+            eval_path = os.path.join(args.data_dir, "tooluse_eval.parquet")
         else:
             print(f"Unknown benchmark: {bench}, skipping")
             continue

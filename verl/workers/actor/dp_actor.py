@@ -19,6 +19,7 @@ Single Process Actor
 
 import logging
 import os
+from typing import Optional
 
 import torch
 from torch import nn
@@ -67,6 +68,11 @@ class DataParallelPPOActor(BasePPOActor):
         super().__init__(config)
         self.actor_module = actor_module
         self.actor_optimizer = actor_optimizer
+        # ============ [EasyOPD:SDPO] EMA self-teacher module ============
+        # A separate (EMA-updated) self-teacher used by SDPO (loss_mode='sdpo').
+        # Built and assigned by the FSDP worker; None for all other methods.
+        self.teacher_module: Optional[nn.Module] = None
+        # ============ [EasyOPD:SDPO] End ============
         role = "Ref" if actor_optimizer is None else "Actor"
 
         self.use_remove_padding = self.config.get("use_remove_padding", False)
@@ -115,8 +121,14 @@ class DataParallelPPOActor(BasePPOActor):
         self, micro_batch, temperature, calculate_entropy=False,
         opsa_topk_k=None,
         opsa_gather_indices=None,
+        module=None,
     ):
         """
+        Args:
+            module: optional nn.Module to run the forward on. Defaults to
+                ``self.actor_module``. Used by SDPO to run the (stop-grad) EMA
+                self-teacher forward on ``self.teacher_module``.
+
         Returns:
             entropy: # (bs, response_len)
             log_probs: # (bs, response_len)
@@ -163,6 +175,9 @@ class DataParallelPPOActor(BasePPOActor):
                 "ulysses_sequence_parallel_size > 1 because the local rank only "
                 "holds a sliced rmpad logits view."
             )
+        # [EasyOPD:SDPO] Run on the given module (e.g. the EMA self-teacher) or
+        # default to the actor policy module.
+        model = module if module is not None else self.actor_module
         response_length = micro_batch["responses"].size(-1)
         multi_modal_inputs = {}
         if "multi_modal_inputs" in micro_batch.keys():
@@ -242,7 +257,7 @@ class DataParallelPPOActor(BasePPOActor):
                     extra_args["temperature"] = temperature
                     extra_args["return_dict"] = True
 
-                output = self.actor_module(
+                output = model(
                     input_ids=input_ids_rmpad,
                     attention_mask=None,
                     position_ids=position_ids_rmpad,
@@ -461,7 +476,7 @@ class DataParallelPPOActor(BasePPOActor):
                     extra_args["temperature"] = temperature
                     extra_args["return_dict"] = True
 
-                output = self.actor_module(
+                output = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     position_ids=position_ids,
@@ -525,6 +540,97 @@ class DataParallelPPOActor(BasePPOActor):
         else:
             self.actor_optimizer.step()
         return grad_norm
+
+    # ============ [EasyOPD:SDPO] EMA self-teacher update ============
+    def _update_teacher(self) -> None:
+        """EMA-update the SDPO self-teacher towards the current policy.
+
+        Faithful to lasgroup/SDPO: when ``teacher_regularization == "ema"`` the
+        self-teacher (a separate module initialised from the reference / base
+        model) is moved towards the student by ``teacher_update_rate`` after each
+        optimizer step:
+
+            teacher <- (1 - rate) * teacher + rate * student
+
+        No-op for non-SDPO methods (``teacher_module is None``).
+        """
+        self_distillation_cfg = getattr(self.config, "self_distillation", None)
+        loss_mode = self.config.policy_loss.get("loss_mode", "vanilla")
+        if not self_distillation_cfg or loss_mode != "sdpo":
+            return
+        teacher_regularization = self._cfg_get(self_distillation_cfg, "teacher_regularization", "ema")
+        if teacher_regularization != "ema":
+            return
+        update_rate = float(self._cfg_get(self_distillation_cfg, "teacher_update_rate", 0.0))
+        if update_rate == 0.0:
+            return
+        if self.teacher_module is None or self.teacher_module is self.actor_module:
+            raise ValueError(
+                "[EasyOPD:sdpo] EMA teacher requires a separate teacher_module in the actor worker."
+            )
+
+        # Match teacher<->student params BY NAME (robust to any .parameters()
+        # ordering / FSDP-unit grouping difference between the two separately-built
+        # FSDP modules), and skip+warn on shape/finite mismatches instead of
+        # silently corrupting the teacher. The one-time [EMA-check] log confirms
+        # the two modules are aligned.
+        teacher_params = dict(self.teacher_module.named_parameters())
+        student_params = dict(self.actor_module.named_parameters())
+
+        try:
+            _rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+        except Exception:  # noqa: BLE001
+            _rank = 0
+
+        if not getattr(self, "_sdpo_ema_checked", False):
+            self._sdpo_ema_checked = True
+            shared = [k for k in teacher_params if k in student_params]
+            only_t = [k for k in teacher_params if k not in student_params]
+            only_s = [k for k in student_params if k not in teacher_params]
+            mism = [k for k in shared if tuple(teacher_params[k].shape) != tuple(student_params[k].shape)]
+            if _rank == 0:
+                logger.warning(
+                    "[EasyOPD:sdpo][EMA-check] teacher=%d student=%d shared=%d teacher_only=%d "
+                    "student_only=%d shape_mismatch=%d | only_t=%s only_s=%s mism=%s",
+                    len(teacher_params), len(student_params), len(shared), len(only_t),
+                    len(only_s), len(mism), only_t[:3], only_s[:3], mism[:3],
+                )
+
+        n_updated = 0
+        n_skipped = 0
+        with torch.no_grad():
+            for name, teacher_param in teacher_params.items():
+                student_param = student_params.get(name, None)
+                if student_param is None or tuple(student_param.shape) != tuple(teacher_param.shape):
+                    n_skipped += 1
+                    continue
+                student_data = student_param.data.to(device=teacher_param.device, dtype=teacher_param.dtype)
+                if not torch.isfinite(student_data).all():
+                    n_skipped += 1
+                    continue
+                teacher_param.data.mul_(1.0 - update_rate).add_(student_data, alpha=update_rate)
+                n_updated += 1
+
+        if _rank == 0 and n_skipped > 0:
+            logger.warning(
+                "[EasyOPD:sdpo] EMA teacher update skipped %d/%d params (shape/finite mismatch).",
+                n_skipped, n_updated + n_skipped,
+            )
+
+    @staticmethod
+    def _cfg_get(cfg, key, default):
+        if cfg is None:
+            return default
+        if isinstance(cfg, dict):
+            return cfg.get(key, default)
+        getter = getattr(cfg, "get", None)
+        if callable(getter):
+            try:
+                return cfg.get(key, default)
+            except Exception:  # noqa: BLE001
+                pass
+        return getattr(cfg, key, default)
+    # ============ [EasyOPD:SDPO] End ============
 
     @GPUMemoryLogger(role="dp actor", logger=logger)
     def compute_log_prob(self, data: DataProto, calculate_entropy=False) -> torch.Tensor:
@@ -683,7 +789,10 @@ class DataParallelPPOActor(BasePPOActor):
         except Exception:  # noqa: BLE001
             _resolved_method = loss_mode
         vopd_enabled = _resolved_method == "vision_opd"
-        if vopd_enabled:
+        # ============ [EasyOPD:SDPO] SDPO reuses the self-distillation teacher data flow ============
+        sdpo_enabled = _resolved_method == "sdpo"
+        # ============ [EasyOPD:SDPO] End ============
+        if vopd_enabled or sdpo_enabled:
             vopd_required_keys = [
                 "teacher_input_ids",
                 "teacher_attention_mask",
@@ -778,14 +887,32 @@ class DataParallelPPOActor(BasePPOActor):
                         and "teacher_input_ids" in model_inputs
                         and "teacher_loss_mask" in model_inputs
                     )
+                    # ============ [EasyOPD:SDPO] extract the student's top-K log-probs in the
+                    # SAME forward that produces log_prob (faithful to lasgroup/SDPO, which
+                    # fuses topk extraction into the main forward). This removes the redundant
+                    # second student forward that compute_sdpo_actor_loss used to run.
+                    sdpo_topk_k = None
+                    if sdpo_enabled and "teacher_input_ids" in model_inputs:
+                        _sd_cfg = getattr(self.config, "self_distillation", None)
+                        if _sd_cfg is not None:
+                            _sd_full_logit = bool(self._cfg_get(_sd_cfg, "full_logit_distillation", True))
+                            _sd_topk = self._cfg_get(_sd_cfg, "distillation_topk", None)
+                            if _sd_full_logit and _sd_topk is not None and int(_sd_topk) > 0:
+                                sdpo_topk_k = int(_sd_topk)
+                    # ============ [EasyOPD:SDPO] End ============
 
-                    if opsa_gather_indices is not None or simple_xtok_requested:
+                    sdpo_student_topk_lp = None
+                    sdpo_student_topk_idx = None
+                    if opsa_gather_indices is not None or simple_xtok_requested or sdpo_topk_k is not None:
                         entropy, log_prob, forward_extra = self._forward_micro_batch(
                             model_inputs, temperature=temperature, calculate_entropy=calculate_entropy,
                             opsa_gather_indices=opsa_gather_indices,
+                            opsa_topk_k=sdpo_topk_k,
                         )
                         student_topk_log_probs = forward_extra.get("gathered_log_probs", None)
                         simple_xtok_loss = forward_extra.get("simple_xtok_loss", None)
+                        sdpo_student_topk_lp = forward_extra.get("topk_log_probs", None)
+                        sdpo_student_topk_idx = forward_extra.get("topk_indices", None)
                     else:
                         entropy, log_prob = self._forward_micro_batch(
                             model_inputs, temperature=temperature, calculate_entropy=calculate_entropy
@@ -942,6 +1069,49 @@ class DataParallelPPOActor(BasePPOActor):
 
                         continue  # Skip the normal loss path below
                     # ============ [EasyOPD] End ============
+
+                    # ============ [EasyOPD:SDPO] Self-Distillation Policy Optimization loss ============
+                    # SDPO (Hübotter et al., 2026, arXiv:2601.20802): distill the
+                    # feedback-informed self-teacher pi_tilde(.|x,f) into the student pi(.|x).
+                    # Faithful to lasgroup/SDPO: the self-teacher is a SEPARATE EMA
+                    # module (self.teacher_module), fed the reprompted context
+                    # (teacher_input_ids built in ray_trainer via
+                    # easyopd.methods.sdpo.core.build_sdpo_teacher_inputs). Samples
+                    # without a teacher contribute zero gradient (no GRPO fallback);
+                    # token-level rollout-correction IS weights are applied.
+                    try:
+                        from easyopd.registry import resolve_method_name as _resolve_sdpo
+                        _sdpo_active = _resolve_sdpo(loss_mode) == "sdpo" if loss_mode else False
+                    except Exception:  # noqa: BLE001
+                        _sdpo_active = (loss_mode == "sdpo")
+                    if _sdpo_active and "teacher_input_ids" in model_inputs:
+                        from easyopd.methods.sdpo.core import compute_sdpo_actor_loss
+
+                        sdpo_cfg = getattr(self.config, "self_distillation", None)
+                        sdpo_rollout_is_weights = model_inputs.get("rollout_is_weights", None)
+                        policy_loss, sdpo_metrics = compute_sdpo_actor_loss(
+                            model_inputs=model_inputs,
+                            student_log_prob=log_prob,
+                            old_log_prob=old_log_prob,
+                            response_mask=response_mask,
+                            self_distillation_cfg=sdpo_cfg,
+                            loss_agg_mode=loss_agg_mode,
+                            temperature=temperature,
+                            forward_fn=self._forward_micro_batch,
+                            teacher_module=(self.teacher_module or self.actor_module),
+                            rollout_is_weights=sdpo_rollout_is_weights,
+                            # Reuse the student top-K already extracted by the main forward
+                            # above; avoids a second student forward (faithful to the reference).
+                            student_topk_log_probs=sdpo_student_topk_lp,
+                            student_topk_indices=sdpo_student_topk_idx,
+                        )
+
+                        loss = policy_loss * loss_scale_factor
+                        loss.backward()
+
+                        append_to_dict(metrics, {f"actor/{k}": v for k, v in sdpo_metrics.items()})
+                        continue  # Skip the normal loss path below
+                    # ============ [EasyOPD:SDPO] End ============
 
                     # ============ [EasyOPD] Context distillation KL loss (OPCD via hook dispatch) ============
                     stage_merge = data.meta_info.get("stage_merge", False) if hasattr(data, 'meta_info') else False
@@ -1243,4 +1413,13 @@ class DataParallelPPOActor(BasePPOActor):
                 # ============ [EasyOPD] End ============
 
         self.actor_optimizer.zero_grad()
+
+        # ============ [EasyOPD:SDPO] EMA self-teacher update (once per update_policy) ============
+        # Faithful to lasgroup/SDPO: after all mini-batch optimizer steps, move the
+        # EMA self-teacher towards the updated policy. No-op unless loss_mode='sdpo'
+        # with a separate teacher_module.
+        if sdpo_enabled and self.teacher_module is not None:
+            self._update_teacher()
+        # ============ [EasyOPD:SDPO] End ============
+
         return metrics
