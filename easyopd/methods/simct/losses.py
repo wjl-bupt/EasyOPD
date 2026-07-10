@@ -499,7 +499,7 @@ def compute_simct_xtok_logits_processor(
             skipped_samples += 1
             continue
 
-        teacher_hidden = torch.from_numpy(teacher_hidden_np).to(device=device, dtype=dtype)
+        teacher_hidden = torch.from_numpy(np.ascontiguousarray(teacher_hidden_np)).to(device=device, dtype=dtype)
         with torch.no_grad():
             teacher_logits_aligned = teacher_lm_head(teacher_hidden)
 

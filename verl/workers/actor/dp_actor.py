@@ -1333,7 +1333,21 @@ class DataParallelPPOActor(BasePPOActor):
                         )
 
                         loss = policy_loss * loss_scale_factor
-                        loss.backward()
+                        # Guard: if all samples were skipped (e.g., no aligned segments in SimCT),
+                        # the loss tensor has no grad_fn. We must still call backward with a
+                        # zero-valued dummy loss derived from the computation graph (log_prob),
+                        # so that FSDP's gradient sync does not deadlock across ranks.
+                        if loss.requires_grad:
+                            loss.backward()
+                        else:
+                            logger.warning(
+                                "[EasyOPD:%s] loss has no grad_fn (all samples skipped in this micro-batch); "
+                                "using zero dummy loss to keep FSDP in sync.", loss_mode
+                            )
+                            # Use log_prob (from student forward pass) to create a zero loss
+                            # that participates in the FSDP computation graph properly.
+                            dummy_loss = (log_prob * 0.0).sum() * loss_scale_factor
+                            dummy_loss.backward()
 
                         valid_tokens = response_mask.sum().clamp(min=1)
                         simple_metrics = {
