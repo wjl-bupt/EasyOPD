@@ -273,17 +273,32 @@ class MultiTurnSFTDataset(Dataset):
         if len(concat_tokens) != len(full_tokens_list) or not all(
             a == b for a, b in zip(concat_tokens, full_tokens_list, strict=True)
         ):
-            logging.warning(
-                f"Token mismatch detected! Full tokenization length: {len(full_tokens_list)}, Concatenated tokens "
-                f"length: {len(concat_tokens)}. Using concatenated version."
-                # f"full tokens text: {self.tokenizer.decode(full_tokens_list)}"
-                # f"concat tokens text: {self.tokenizer.decode(concat_tokens)}"
-            )
-            return (
-                torch.tensor(concat_tokens, dtype=torch.long),
-                torch.tensor(concat_loss_mask, dtype=torch.long),
-                torch.tensor(concat_attention_mask, dtype=torch.long),
-            )
+            if len(concat_tokens) == len(full_tokens_list):
+                # Same length but different tokens: use full_tokens (correct sequence)
+                # with concat_loss_mask (correct loss boundaries).
+                # This handles cases like Phi-4-mini where apply_chat_template with
+                # add_generation_prompt=False appends <|endoftext|> but the full
+                # conversation has <|assistant|> at that position instead.
+                logging.warning(
+                    f"Token mismatch detected (same length {len(full_tokens_list)}). "
+                    f"Using full_tokens with concatenated loss_mask."
+                )
+                return (
+                    full_tokens_tensor,
+                    torch.tensor(concat_loss_mask, dtype=torch.long),
+                    torch.tensor(concat_attention_mask, dtype=torch.long),
+                )
+            else:
+                # Different lengths: fall back to concat_tokens (original behavior)
+                logging.warning(
+                    f"Token mismatch detected! Full tokenization length: {len(full_tokens_list)}, "
+                    f"Concatenated tokens length: {len(concat_tokens)}. Using concatenated version."
+                )
+                return (
+                    torch.tensor(concat_tokens, dtype=torch.long),
+                    torch.tensor(concat_loss_mask, dtype=torch.long),
+                    torch.tensor(concat_attention_mask, dtype=torch.long),
+                )
 
         return (
             full_tokens_tensor,
@@ -340,6 +355,119 @@ class MultiTurnSFTDataset(Dataset):
                 i += 1
             else:
                 raise ValueError(f"Unknown role: {cur_messages['role']}")
+
+        # Validate against full tokenization to catch template-induced mismatches.
+        # For Phi-4-mini with transformers 4.57.1:
+        #   - Per-message tokenization with add_generation_prompt=False produces
+        #     <|endoftext|> where the full conversation has <|end|><|assistant|>
+        #   - This causes concat_tokens to be missing <|assistant|> and have wrong tokens
+        #   - Solution: use full_tokens (correct sequence) and rebuild loss_mask
+        #     based on assistant message boundaries
+        try:
+            full_text = tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=False,
+                enable_thinking=enable_thinking, tools=tools,
+                **self.apply_chat_template_kwargs,
+            )
+            full_tokens = tokenizer.encode(full_text, add_special_tokens=False)
+            if full_tokens != concat_tokens:
+                # Rebuild loss_mask from scratch using full_tokens
+                # Strategy: find <|assistant|> tokens and mark everything after them
+                # (until the next <|end|><|endoftext|> or <|user|>/<|system|>) as loss=1
+                assistant_token_id = tokenizer.convert_tokens_to_ids("<|assistant|>")
+                end_token_id = tokenizer.convert_tokens_to_ids("<|end|>")
+                endoftext_token_id = tokenizer.convert_tokens_to_ids("<|endoftext|>")
+                user_token_id = tokenizer.convert_tokens_to_ids("<|user|>")
+                system_token_id = tokenizer.convert_tokens_to_ids("<|system|>")
+
+                new_loss_mask = [0] * len(full_tokens)
+                in_assistant = False
+                for ti in range(len(full_tokens)):
+                    if full_tokens[ti] == assistant_token_id:
+                        in_assistant = True
+                        continue  # <|assistant|> itself has loss=0
+                    if in_assistant:
+                        if full_tokens[ti] in (user_token_id, system_token_id):
+                            in_assistant = False
+                        else:
+                            new_loss_mask[ti] = 1
+                            # Stop at <|endoftext|> (but include it in loss)
+                            if full_tokens[ti] == endoftext_token_id:
+                                in_assistant = False
+
+                concat_tokens = full_tokens
+                concat_loss_mask = new_loss_mask
+                concat_attention_mask = [1] * len(full_tokens)
+                if item < 3:
+                    logging.info(
+                        f"[Sample {item}] Token mismatch fixed: using full_tokens "
+                        f"(len={len(full_tokens)}) with rebuilt loss_mask "
+                        f"(loss_tokens={sum(new_loss_mask)})"
+                    )
+        except Exception as e:
+            if item < 3:
+                logging.warning(f"[Sample {item}] Full tokenization failed: {e}")
+            pass  # If full tokenization fails, use concat_tokens as-is
+
+        # === FIX: Loss mask off-by-one correction for ALL assistant messages ===
+        # In fsdp_sft_trainer.py, loss is computed as:
+        #   loss_mask_shifted = loss_mask[:, :-1]
+        #   loss[i] = CE(logits[i], input_ids[i+1]) * loss_mask_shifted[i]
+        # So loss_mask[i]=1 means model learns to predict input_ids[i+1].
+        #
+        # For Phi-4-mini, the token sequence is:
+        #   ... <|end|> <|assistant|> The answer is 4. <|end|> <|endoftext|>
+        #   loss:  0       0          1   1     1  1    1       1
+        #
+        # After trainer's [:, :-1] shift, loss_mask[<|assistant|> pos]=0 means
+        # the model does NOT learn to predict "The" (first response token).
+        #
+        # Fix: For each 0->1 transition in loss_mask, set the position before
+        # the first loss=1 to also be 1. This makes the model learn to predict
+        # the first response token given the <|assistant|> context.
+        for j in range(1, len(concat_loss_mask)):
+            if concat_loss_mask[j] == 1 and concat_loss_mask[j - 1] == 0:
+                concat_loss_mask[j - 1] = 1
+        # === END FIX ===
+
+        # === DEBUG LOGGING: Print loss_mask details for first few samples ===
+        # This helps verify:
+        # 1. Token sequence is correct (has <|assistant|>, not <|endoftext|> in middle)
+        # 2. Loss mask boundaries are correct
+        # 3. After the off-by-one fix, first response token IS learned
+        if item < 3:
+            non_pad_len = len(concat_tokens)
+            loss_start_idx = next((j for j, m in enumerate(concat_loss_mask) if m == 1), -1)
+            loss_end_idx = non_pad_len - 1 - next((j for j, m in enumerate(reversed(concat_loss_mask)) if m == 1), -1) if 1 in concat_loss_mask else -1
+            total_loss_tokens = sum(concat_loss_mask)
+            logging.info(
+                f"[Sample {item}] Loss mask debug: "
+                f"total_tokens={non_pad_len}, loss_tokens={total_loss_tokens}, "
+                f"loss_range=[{loss_start_idx}:{loss_end_idx+1}]"
+            )
+            # Show tokens around the loss boundary (where loss transitions from 0 to 1)
+            if loss_start_idx >= 0:
+                boundary_start = max(0, loss_start_idx - 1)
+                boundary_end = min(non_pad_len, loss_start_idx + 4)
+                boundary_info = []
+                for bi in range(boundary_start, boundary_end):
+                    tok_id = concat_tokens[bi]
+                    tok_text = tokenizer.decode([tok_id])
+                    mask_val = concat_loss_mask[bi]
+                    boundary_info.append(f"  idx={bi}: id={tok_id} loss={mask_val} text={repr(tok_text)}")
+                logging.info(
+                    f"[Sample {item}] Loss boundary tokens:\n" + "\n".join(boundary_info)
+                )
+                # After fix: loss_mask[loss_start_idx]=1 means model predicts input_ids[loss_start_idx+1]
+                # loss_start_idx should now be at <|assistant|> position
+                first_predicted = concat_tokens[loss_start_idx + 1] if loss_start_idx + 1 < non_pad_len else None
+                first_predicted_text = tokenizer.decode([first_predicted]) if first_predicted is not None else "N/A"
+                logging.info(
+                    f"[Sample {item}] First token model learns to predict: "
+                    f"input_ids[{loss_start_idx+1}] = {repr(first_predicted_text)} "
+                    f"(given context up to input_ids[{loss_start_idx}] = {repr(tokenizer.decode([concat_tokens[loss_start_idx]]))})"
+                )
+        # === END DEBUG LOGGING ===
 
         # Convert concatenated tokens to tensors directly
         input_ids = torch.tensor(concat_tokens, dtype=torch.long)

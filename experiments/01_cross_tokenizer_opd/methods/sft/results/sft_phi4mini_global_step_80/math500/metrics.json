@@ -1,0 +1,25 @@
+{
+  "model": "global_step_80",
+  "model_path": "/root/workspace/models/runs/01_cross_tokenizer_opd/sft/sft_phi4mini/hf/global_step_80",
+  "served_model": "/root/workspace/models/runs/01_cross_tokenizer_opd/sft/sft_phi4mini/hf/global_step_80",
+  "dataset": "math500",
+  "metric": "Accuracy",
+  "score": 0.592,
+  "correct": 296,
+  "total_samples": 500,
+  "elapsed_seconds": 145.49014282226562,
+  "throughput_sps": 3.43665893991741,
+  "eval_mode": "0-shot chat (boxed)",
+  "truncated_count": 0,
+  "extraction_failed_count": 10,
+  "empty_output_count": 0,
+  "timestamp": "2026-06-26T00:04:23.251478",
+  "config": {
+    "base_url": "http://127.0.0.1:30000",
+    "max_concurrent": 256,
+    "max_new_tokens": 4096,
+    "temperature": 0.6,
+    "top_p": 0.95,
+    "split": "test"
+  }
+}

@@ -40,10 +40,10 @@ trap 'rc=$?; echo "[FATAL] launch.sh exited with code $rc at line $LINENO (last 
 #   ppo_max_token_len_per_gpu   = 8193          (must be > max_prompt+max_response=8192;
 #                                                use_dynamic_bsz=True will pack one full
 #                                                sequence per micro-batch, lowest mem)
-#   actor_lr / warmup_ratio     = 1e-6 / 0.25
+#   actor_lr / warmup_ratio     = 5e-7 / 0.05
 #   rollout.n / temperature     = 1 / 0.6       (OPD doesn't need multi-sample)
-#   total_epochs                = 2
-#   save_freq                   = 77            (-> ckpts at step 77, 154, 231, 308)
+#   total_epochs                = 1
+#   save_freq                   = 20            (-> ckpts at step 20, 40, ..., 140, 154)
 #   FSDP param/optimizer offload= True (always on, mandatory for shared mode
 #                                       to leave room for SGLang teacher KV cache).
 #
@@ -92,7 +92,7 @@ mkdir -p "${RESULTS_DIR}"
 # HF dirs:
 #   .../hf/global_step_78/   <- mid-epoch ckpt (this one, used as RL start)
 #   .../hf/global_step_156/  <- final ckpt
-STUDENT_MODEL="/root/workspace/models/runs/01_cross_tokenizer_opd/sft/sft_phi4mini/hf/global_step_78"
+STUDENT_MODEL="/root/workspace/models/runs/01_cross_tokenizer_opd/sft/sft_phi4mini/hf/global_step_116"
 # Teacher = original Qwen2.5-7B-Instruct on local disk.
 TEACHER_MODEL="/root/workspace/models/Qwen2.5-7B-Instruct"
 
@@ -123,17 +123,18 @@ TEACHER_LAYOUT="${TEACHER_LAYOUT:-shared}"
 MAX_PROMPT_LEN=4096
 MAX_RESPONSE_LEN=4096
 MAX_MODEL_LEN=$(( MAX_PROMPT_LEN + MAX_RESPONSE_LEN + 1 ))   # 8193
+TEACHER_MAX_MODEL_LEN=16384                                     # large headroom: cross-tokenizer can expand tokens significantly
 # Per-GPU token budget for FSDP forward/backward and vLLM log-prob recompute.
 # Higher = fewer micro-batches per step, faster update_actor, but higher peak
 # activation memory. Default 16384 packs ~2 full sequences per micro-batch.
 # Used to be 8193 (one seq/micro-batch, lowest mem) before SPEED_TIER tuning.
-PPO_MAX_TOKEN_LEN_PER_GPU=${PPO_MAX_TOKEN_LEN_PER_GPU:-16384}
+PPO_MAX_TOKEN_LEN_PER_GPU=${PPO_MAX_TOKEN_LEN_PER_GPU:-8193}
 
-ACTOR_LR=1e-6
-LR_WARMUP_RATIO=0.25
-TOTAL_EPOCHS=2
+ACTOR_LR=5e-7
+LR_WARMUP_RATIO=0.05
+TOTAL_EPOCHS=1
 
-SAVE_FREQ=77                  # ckpts at step 77, 154, 231, 308 -> 4 ckpts across 2 epochs
+SAVE_FREQ=20                  # ckpts at step 20, 40, 60, ... (aligned with KDFlow save_steps=20)
 TEST_FREQ=-1                  # eval after merge, not in-loop
 
 ROLLOUT_TP=1
@@ -160,12 +161,16 @@ TEACHER_TP=1
 #                Default. Matches the user-requested ABCD combo. FSDP offload
 #                (E) intentionally kept ON for stability; flip to "extreme" if needed.
 #   extreme    - A + B + C + D + E               (~85 GB peak, ~25-30 s/step, OOM risk)
-SPEED_TIER="${SPEED_TIER:-aggressive}"
+SPEED_TIER="${SPEED_TIER:-safe}"
 
 if [ "${SPEED_TIER}" = "safe" ]; then
+    # NOTE: GPU card-holding script (train_smi2.py) occupies ~68 GiB/GPU,
+    # leaving only ~26 GiB available. gpu_memory_utilization is relative to
+    # TOTAL GPU memory (95 GiB), so 0.25 * 95 = 23.75 GiB which fits within
+    # the ~26 GiB available. vLLM and SGLang are mutually exclusive in time.
     ENABLE_GRAD_CKPT=True
-    ROLLOUT_MEM_DEFAULT=0.55
-    TEACHER_MEM_DEFAULT=0.55
+    ROLLOUT_MEM_DEFAULT=0.25
+    TEACHER_MEM_DEFAULT=0.25
     FSDP_PARAM_OFFLOAD=True
     FSDP_OPTIMIZER_OFFLOAD=True
 elif [ "${SPEED_TIER}" = "fast" ]; then
@@ -227,7 +232,7 @@ if [ "${TEACHER_LAYOUT}" = "shared" ]; then
     SIMPLE_TEACHER_NUM_GPUS_PER_ACTOR=0
     TRAIN_BATCH_SIZE=64
     PPO_MINI_BATCH_SIZE=64
-    EXPECTED_FINAL_STEP=308       # 9900 / 64 = 154 per epoch * 2 epochs = 308
+    EXPECTED_FINAL_STEP=154       # 9900 / 64 = 154 per epoch * 1 epoch = 154
     ROLLOUT_GPU_MEM_UTIL=${ROLLOUT_MEM_DEFAULT}
     TEACHER_GPU_MEM_UTIL=${TEACHER_MEM_DEFAULT}
     STUDENT_N_GPUS_PER_NODE=8
@@ -242,7 +247,7 @@ elif [ "${TEACHER_LAYOUT}" = "split" ]; then
     SIMPLE_TEACHER_NUM_GPUS_PER_ACTOR=1.0
     TRAIN_BATCH_SIZE=66
     PPO_MINI_BATCH_SIZE=66
-    EXPECTED_FINAL_STEP=300       # 9900 / 66 = 150 per epoch * 2 epochs = 300
+    EXPECTED_FINAL_STEP=150       # 9900 / 66 = 150 per epoch * 1 epoch = 150
     ROLLOUT_GPU_MEM_UTIL=0.25
     TEACHER_GPU_MEM_UTIL=0.6
     STUDENT_N_GPUS_PER_NODE=$((N_GPUS - TEACHER_WORLD_SIZE))   # 6
@@ -344,10 +349,59 @@ fi
 if [ "${SKIP_RAY_RESTART:-0}" != "1" ]; then
     echo "[$(date)] ===== Step 2: Restarting Ray ====="
     unset RAY_ADDRESS
+
+    # -- 2a. Stop Ray and aggressively kill any lingering processes ----------
     ${RAY} stop --force 2>/dev/null || true
-    sleep 3
+    sleep 5
+
+    # Kill any orphan Ray processes that ray stop may have missed.
+    # Patterns: raylet, gcs_server, ray::* workers, ray_client_server, etc.
+    # Use pkill -f with care: only match Ray-specific process names.
+    for _pat in "raylet" "gcs_server" "ray::" "ray_client_server" "ray::IDLE"; do
+        pkill -9 -f "${_pat}" 2>/dev/null || true
+    done
+    sleep 5
+
+    # Now clean up /tmp/ray artifacts (processes should be fully dead by now).
     rm -rf /tmp/ray/session_* /tmp/ray/ray_current_cluster 2>/dev/null || true
-    ${RAY} start --head --disable-usage-stats --node-ip-address=${RAY_NODE_IP} --port=${RAY_PORT} --num-cpus=${RAY_NUM_CPUS} --num-gpus=${N_GPUS} --include-dashboard=false
+    sleep 2
+
+    # -- 2b. Start Ray fresh ------------------------------------------------
+    # NOTE: verl is editable-installed on NFS (/apdcephfs_cq8/...), so each Ray
+    # worker takes 45+ seconds just to `import verl`. With many workers all
+    # importing at once on NFS, the default 60s register timeout is far from
+    # enough. Bump RAY_worker_register_timeout_seconds and the health-check
+    # parameters before `ray start` so the raylet inherits these settings.
+    export RAY_worker_register_timeout_seconds=600
+    export RAY_health_check_initial_delay_ms=30000
+    export RAY_health_check_period_ms=10000
+    export RAY_health_check_timeout_ms=20000
+    export RAY_health_check_failure_threshold=10
+
+    echo "[$(date)] Launching ray start --head ..."
+    ${RAY} start --head \
+        --disable-usage-stats \
+        --node-ip-address="${RAY_NODE_IP}" \
+        --port="${RAY_PORT}" \
+        --num-cpus="${RAY_NUM_CPUS}" \
+        --num-gpus="${N_GPUS}" \
+        --include-dashboard=false
+    echo "[$(date)] ray start returned, waiting 10s for raylet/GCS to stabilize..."
+    sleep 10
+
+    # -- 2c. Quick sanity check: is raylet actually alive? -------------------
+    if ${RAY} status 2>/dev/null; then
+        echo "[$(date)] ray status OK"
+    else
+        echo "[$(date)] WARNING: ray status failed — checking ray logs..."
+        if [ -d "/tmp/ray/session_latest/logs" ]; then
+            echo "[$(date)] === Last 30 lines of raylet.err ==="
+            tail -30 /tmp/ray/session_latest/logs/raylet.err 2>/dev/null || echo "(no raylet.err)"
+            echo "[$(date)] === Last 30 lines of gcs_server.err ==="
+            tail -30 /tmp/ray/session_latest/logs/gcs_server.err 2>/dev/null || echo "(no gcs_server.err)"
+        fi
+        echo "[$(date)] Will retry health-check below; if it keeps failing, check the logs above."
+    fi
 fi
 
 export RAY_ADDRESS="${RAY_HEAD_ADDRESS}"
@@ -430,6 +484,15 @@ TRAIN_LAUNCH_CWD="/tmp/easyopd_${EXP_NAME}_${METHOD}_${RUN_NAME}"
 mkdir -p "${TRAIN_LAUNCH_CWD}"
 echo "[$(date)] Training driver cwd: ${TRAIN_LAUNCH_CWD}"
 
+# Same Ray timeout settings as in Step 2: the training driver will spawn many
+# Ray actors / workers that each `import verl` from NFS, so we must keep the
+# enlarged worker register timeout in the driver's environment as well.
+export RAY_worker_register_timeout_seconds=600
+export RAY_health_check_initial_delay_ms=30000
+export RAY_health_check_period_ms=10000
+export RAY_health_check_timeout_ms=20000
+export RAY_health_check_failure_threshold=10
+
 (
 cd "${TRAIN_LAUNCH_CWD}"
 ${PYTHON} -m verl.trainer.main_ppo \
@@ -486,7 +549,7 @@ ${PYTHON} -m verl.trainer.main_ppo \
     +distillation.teacher_models.teacher_model.inference.pipeline_model_parallel_size=1 \
     +distillation.teacher_models.teacher_model.inference.name=sglang \
     +distillation.teacher_models.teacher_model.inference.gpu_memory_utilization=${TEACHER_GPU_MEM_UTIL} \
-    +distillation.teacher_models.teacher_model.inference.max_model_len=${MAX_MODEL_LEN} \
++distillation.teacher_models.teacher_model.inference.max_model_len=${TEACHER_MAX_MODEL_LEN} \
     +distillation.distillation_loss.loss_mode=${DISTILL_LOSS_MODE} \
     +distillation.distillation_loss.use_cross_tokenizer=True \
     +distillation.distillation_loss.use_task_rewards=False \
@@ -596,7 +659,7 @@ for CKPT_DIR in "${ALL_CKPTS[@]}"; do
     MERGED_DIR="${HF_CKPT_DIR}/${STEP_NAME}"
     TAG="${RUN_NAME}_${STEP_NAME}"
 
-    if [ ! -d "${MERGED_DIR}" ] || [ ! -f "${MERGED_DIR}/model.safetensors" ]; then
+    if [ ! -d "${MERGED_DIR}" ] || { [ ! -f "${MERGED_DIR}/model.safetensors" ] && [ ! -f "${MERGED_DIR}/model.safetensors.index.json" ]; }; then
         echo "[$(date)] [${STEP_NAME}] Merged dir not ready, skip eval."
         continue
     fi

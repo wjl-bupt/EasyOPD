@@ -1,0 +1,45 @@
+\begin{table}[t]
+    \centering
+    \small
+    \setlength{\tabcolsep}{7pt}
+    \renewcommand{\arraystretch}{1.15}
+    \caption{
+    Comparison of GRPO, response-level OPD, and SOD using Qwen3-1.7B as the student. OPD and SOD use a GRPO-optimized Qwen3-4B as the teacher. Results are reported as percentages; Avg.\ is the unweighted mean across AIME 2024, AIME 2025, and LiveCodeBench v6. The best result in each column is highlighted in bold.
+    }
+    \label{tab:stepwise_opd_results}
+    \begin{tabular}{lcccc}
+        \toprule
+        Method
+        & AIME24
+        & AIME25
+        & LCB-v6
+        & Avg. \\
+        \midrule
+        Base
+        & 17.19
+        & 12.81
+        & 12.41
+        & 14.14 \\
+
+        \midrule
+        
+        GRPO
+        & 34.06
+        & 26.25
+        & 21.93
+        & 27.41 \\
+
+        OPD
+        & 38.13
+        & 36.04
+        & 30.27
+        & 34.81 \\
+
+        SOD
+        & \textbf{43.65}
+        & \textbf{38.33}
+        & \textbf{37.88}
+        & \textbf{39.95} \\
+        \bottomrule
+    \end{tabular}
+\end{table}

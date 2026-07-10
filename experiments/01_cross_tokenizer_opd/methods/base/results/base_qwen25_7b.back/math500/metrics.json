@@ -1,0 +1,25 @@
+{
+  "model": "Qwen2.5-7B-Instruct",
+  "model_path": "/root/workspace/models/Qwen2.5-7B-Instruct",
+  "served_model": "/root/workspace/models/Qwen2.5-7B-Instruct",
+  "dataset": "math500",
+  "metric": "Accuracy",
+  "score": 0.658,
+  "correct": 329,
+  "total_samples": 500,
+  "elapsed_seconds": 84.25692224502563,
+  "throughput_sps": 5.9342305258428665,
+  "eval_mode": "0-shot chat (boxed)",
+  "truncated_count": 0,
+  "extraction_failed_count": 4,
+  "empty_output_count": 0,
+  "timestamp": "2026-06-24T00:34:14.851107",
+  "config": {
+    "base_url": "http://127.0.0.1:30000",
+    "max_concurrent": 256,
+    "max_new_tokens": 4096,
+    "temperature": 0.6,
+    "top_p": 0.95,
+    "split": "test"
+  }
+}

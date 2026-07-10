@@ -1,0 +1,16 @@
+{
+  "raw_dataset": "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/dataset/mixed_math_code_10k_with_source",
+  "temperature": 0.6,
+  "top_p": 0.95,
+  "n_trajectories": 8,
+  "max_new_tokens": 4096,
+  "min_response_length": 20,
+  "max_response_length": 4000,
+  "max_repetition_ratio": 0.3,
+  "total_questions": 10000,
+  "total_responses": 80000,
+  "correct_responses": 51785,
+  "quality_passed": 51348,
+  "selected": 6991,
+  "timestamp": "2026-06-22 21:49:07"
+}

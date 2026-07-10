@@ -551,27 +551,27 @@ def evaluate_gsm8k(
     debug: bool = False,
     **kwargs,
 ) -> Dict[str, Any]:
-    """Evaluate GSM8K dataset using 0-shot chat mode."""
-    logger.info(f"Loading GSM8K dataset...")
+    """Evaluate GSM8K dataset using 0-shot chat mode with native #### format."""
+    logger.info(f"Loading GSM8K dataset ({split} split)...")
     logger.info(f"Eval mode: 0-shot chat (####)")
     logger.info(f"Params: temperature={temperature}, top_p={top_p}, max_new_tokens={max_new_tokens}")
 
-    # Load from parquet (verl format)
-    df = pd.read_parquet(dataset_path)
-    logger.info(f"Dataset size: {len(df)}")
+    # Load from HuggingFace dataset (load_from_disk)
+    dataset = load_from_disk(dataset_path)
+    data = dataset[split]
 
     if debug:
-        df = df.head(10)
-        logger.info(f"Debug mode: processing {len(df)} samples only")
+        data = data.select(range(min(10, len(data))))
+        logger.info(f"Debug mode: processing {len(data)} samples only")
 
-    # Parse prompts to extract questions and ground truths
+    logger.info(f"Dataset size: {len(data)}")
+
     questions = []
     gold_answers = []
-
-    for _, row in df.iterrows():
-        _, user_content = parse_verl_prompt(row['prompt'])
-        questions.append(user_content)
-        gold_answers.append(str(row['reward_model']['ground_truth']))
+    for i in range(len(data)):
+        sample = data[i]
+        questions.append(sample['question'])
+        gold_answers.append(sample['answer'])
 
     logger.info(f"Total {len(questions)} requests, starting concurrent inference...")
     client.max_concurrent = max_concurrent
@@ -689,27 +689,45 @@ def evaluate_math500(
     debug: bool = False,
     **kwargs,
 ) -> Dict[str, Any]:
-    """Evaluate MATH-500 dataset using 0-shot chat mode with boxed format."""
+    """Evaluate MATH-500 dataset using 0-shot chat mode with boxed format.
+
+    MATH-500 answers are LaTeX strings; uses multi-level equivalence checking.
+    """
     logger.info(f"Loading MATH-500 dataset...")
     logger.info(f"Eval mode: 0-shot chat (boxed)")
     logger.info(f"Params: temperature={temperature}, top_p={top_p}, max_new_tokens={max_new_tokens}")
 
-    # Load from parquet (verl format)
-    df = pd.read_parquet(dataset_path)
-    logger.info(f"Dataset size: {len(df)}")
+    # Load from HuggingFace dataset (load_from_disk)
+    # MATH-500 is stored as a single split (from HuggingFaceH4/MATH-500)
+    dataset_disk_path = os.path.join(dataset_path, "dataset")
+    if os.path.exists(dataset_disk_path):
+        data = load_from_disk(dataset_disk_path)
+    else:
+        ds = load_from_disk(dataset_path)
+        if isinstance(ds, dict) and split in ds:
+            data = ds[split]
+        else:
+            data = ds
 
     if debug:
-        df = df.head(10)
-        logger.info(f"Debug mode: processing {len(df)} samples only")
+        data = data.select(range(min(10, len(data))))
+        logger.info(f"Debug mode: processing {len(data)} samples only")
 
-    # Parse prompts to extract problems and ground truths
+    logger.info(f"Dataset size: {len(data)}")
+
     problems = []
     gold_answers = []
+    subjects = []
+    levels = []
+    unique_ids = []
 
-    for _, row in df.iterrows():
-        _, user_content = parse_verl_prompt(row['prompt'])
-        problems.append(user_content)
-        gold_answers.append(str(row['reward_model']['ground_truth']))
+    for i in range(len(data)):
+        sample = data[i]
+        problems.append(sample['problem'])
+        gold_answers.append(sample['answer'])
+        subjects.append(sample.get('subject', ''))
+        levels.append(sample.get('level', 0))
+        unique_ids.append(sample.get('unique_id', f'math500_{i}'))
 
     logger.info(f"Total {len(problems)} requests, starting concurrent inference...")
     client.max_concurrent = max_concurrent
@@ -1351,8 +1369,8 @@ DATASET_EVALUATORS = {
 
 # Dataset data file mapping
 DATASET_DATA_FILES = {
-    "gsm8k": "gsm8k_eval.parquet",
-    "math500": "math500_eval.parquet",
+    "gsm8k": "gsm8k",  # HF dataset directory (load_from_disk)
+    "math500": "math500",  # HF dataset directory (load_from_disk)
     "mbpp": "mbpp",  # HF dataset directory
     "live-code-bench-v6": "live-code-bench-v6",  # directory with problems.jsonl
 }
@@ -1404,12 +1422,14 @@ Examples:
         help="Max new tokens to generate (default: 2048)",
     )
     parser.add_argument(
-        "--temperature", type=float, default=0.0,
-        help="Generation temperature (default: 0.0 = greedy)",
+        "--temperature", type=float, default=0.6,
+        help="Generation temperature (default: 0.6, aligned with KDFlow). "
+             "Use 0.0 for greedy, but note that phi-4-mini is prone to "
+             "repetition loops under greedy decoding on MATH500.",
     )
     parser.add_argument(
-        "--top_p", type=float, default=1.0,
-        help="Nucleus sampling top_p (default: 1.0)",
+        "--top_p", type=float, default=0.95,
+        help="Nucleus sampling top_p (default: 0.95, aligned with KDFlow).",
     )
     parser.add_argument(
         "--output_dir", type=str, default=None,

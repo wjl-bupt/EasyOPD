@@ -1,0 +1,25 @@
+{
+  "model": "global_step_60",
+  "model_path": "/root/workspace/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini/hf/global_step_60",
+  "served_model": "/root/workspace/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini/hf/global_step_60",
+  "dataset": "mbpp",
+  "metric": "pass@1",
+  "score": 0.524,
+  "correct": 262,
+  "total_samples": 500,
+  "elapsed_seconds": 54.12410855293274,
+  "throughput_sps": 9.238027440415133,
+  "eval_mode": "0-shot chat with test cases (code generation)",
+  "truncated_count": 0,
+  "extraction_failed_count": 0,
+  "empty_output_count": 0,
+  "timestamp": "2026-06-26T22:44:45.804867",
+  "config": {
+    "base_url": "http://127.0.0.1:30000",
+    "max_concurrent": 256,
+    "max_new_tokens": 2048,
+    "temperature": 0.6,
+    "top_p": 0.95,
+    "split": "test"
+  }
+}

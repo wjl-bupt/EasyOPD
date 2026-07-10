@@ -1,0 +1,45 @@
+\section{Framework Comparison Details}
+\label{app:framework-comparison}
+
+\input{tables/property_apd}
+Table~\ref{tab:opd-frameworks-detailed} provides the
+framework-specific evidence underlying the ratings in
+Table~\ref{tab:opd-frameworks}.
+
+\section{Experimental Setup Details}
+\label{app:exp_setup}
+
+We summarize the optimization, sampling, and hardware settings for the three
+case studies. Unless noted otherwise, all settings are taken from the released
+configuration files and launch scripts.
+
+\paragraph{Cross-tokenizer OPD.}
+We distill Qwen2.5-7B-Instruct (vocabulary size 151{,}936) into a
+Phi-4-mini-Instruct student (3.8B, vocabulary size 200{,}064) that is first
+SFT-warm-started on a shared 10K mixed math-and-code corpus derived from the
+single-turn prompt--answer pairs of the \texttt{mixed\_math\_code\_10k} dataset.
+Training uses GRPO with a cross-tokenizer KL reward and a shared training-prompt
+set and optimization budget across all compared methods. Evaluation uses an
+SGLang-based inference server; we report exact-match accuracy for reasoning
+(verified with \texttt{math\_verify}) and pass@1 for code on GSM8K, MATH500,
+MBPP, and LiveCodeBench v6. Runs use $8\times$ NVIDIA H20 96GB GPUs.
+\todo{Exact learning rate, batch size, and training-step count to be confirmed
+against the final released run configuration.}
+
+\paragraph{On-policy self-distillation.}
+SDPO uses Qwen3-8B as both the student and the self-teacher, with an EMA
+self-teacher (update rate $0.05$), top-$k$ logit distillation with $k=100$, and
+a symmetric KL interpolation ($\alpha=0.5$). We report the highest Average@16
+reached within one-hour and five-hour wall-clock budgets, where Average@16 is
+the mean correctness over 16 independently sampled responses per question. Runs
+use $8\times$ NVIDIA H20 96GB GPUs. \todo{Checkpoint-evaluation frequency and
+the selection rule for the reported budgets to be confirmed.}
+
+\paragraph{Step-wise OPD.}
+We use Qwen3-1.7B as the student and a GRPO-optimized Qwen3-4B as the teacher,
+with a shared SFT initialization, training data, and optimization budget across
+compared methods. Rollouts are multi-turn tool-interaction trajectories, and
+SOD applies step-wise adaptive weighting (with numerical-stability offset
+$\epsilon=10^{-6}$ and bound offset $\delta=0.2$) on top of the response-level
+OPD objective. Each benchmark score is Average@32 over 32 independently sampled
+responses per problem. Runs use $8\times$ NVIDIA H20 96GB GPUs.

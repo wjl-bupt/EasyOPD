@@ -1,0 +1,25 @@
+{
+  "model": "Phi-4-mini-instruct",
+  "model_path": "/root/workspace/models/Phi-4-mini-instruct",
+  "served_model": "/root/workspace/models/Phi-4-mini-instruct",
+  "dataset": "math500",
+  "metric": "Accuracy",
+  "score": 0.542,
+  "correct": 271,
+  "total_samples": 500,
+  "elapsed_seconds": 131.90159034729004,
+  "throughput_sps": 3.7907048632508977,
+  "eval_mode": "0-shot chat (boxed)",
+  "truncated_count": 0,
+  "extraction_failed_count": 6,
+  "empty_output_count": 0,
+  "timestamp": "2026-06-25T19:12:29.800900",
+  "config": {
+    "base_url": "http://127.0.0.1:30000",
+    "max_concurrent": 256,
+    "max_new_tokens": 4096,
+    "temperature": 0.6,
+    "top_p": 0.95,
+    "split": "test"
+  }
+}

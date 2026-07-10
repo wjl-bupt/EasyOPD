@@ -1,0 +1,1493 @@
+% ========================
+% 2.1 大语言模型的知识蒸馏（经典工作）
+% ========================
+
+% checked
+@inproceedings{sanh2019distilbert_kd,
+ author = {Victor Sanh and
+                  Lysandre Debut and
+                  Julien Chaumond and
+                  Thomas Wolf},
+ title = {{DistilBERT}, a Distilled Version of {BERT}: Smaller, Faster, Cheaper and Lighter},
+ booktitle = {Proceedings of the 5th Workshop on Energy Efficient Machine Learning and Cognitive Computing (NeurIPS 2019)},
+ address = {Vancouver, Canada},
+ year = {2019}
+}
+
+% checked
+@inproceedings{jiao2020tinybert_kd,
+ author = {Xiaoqi Jiao and
+                  Yichun Yin and
+                  Lifeng Shang and
+                  Xin Jiang and
+                  Xiao Chen and
+                  Linlin Li and
+                  Fang Wang and
+                  Qun Liu},
+ title = {{TinyBERT}: Distilling {BERT} for Natural Language Understanding},
+ booktitle = {Findings of the Association for Computational Linguistics: {EMNLP} 2020},
+ pages = {4163--4174},
+ address = {Online Event},
+ year = {2020}
+}
+
+% checked
+% 注：原版为 NIPS 2014 Deep Learning Workshop，arXiv 上传于 2015 年
+@article{hinton2015distilling_kd,
+ author = {Geoffrey E. Hinton and
+                  Oriol Vinyals and
+                  Jeffrey Dean},
+ title = {Distilling the Knowledge in a Neural Network},
+ journal = {arXiv preprint},
+ volume = {arXiv:1503.02531},
+ year = {2015},
+}
+
+% checked
+@article{alkhulaifi2021knowledge_kd,
+ author = {Abdolmaged Alkhulaifi and
+                  Fahad Alsahli and
+                  Irfan Ahmad},
+ title = {Knowledge distillation in deep learning and its applications},
+ journal = {PeerJ Computer Science},
+ volume = {7},
+ pages = {e474},
+ year = {2021},
+ publisher = {PeerJ}
+}
+
+% checked
+@inproceedings{gu2024minillm_opd,
+  author    = {Yuxian Gu and Li Dong and Furu Wei and Minlie Huang},
+  title     = {{MiniLLM}: Knowledge Distillation of Large Language Models},
+  booktitle = {The Twelfth International Conference on Learning Representations},
+  year      = {2024},
+  url       = {https://openreview.net/forum?id=5h0qf7IBZZ}
+}
+
+% checked
+% arXiv:2410.11325，ICLR 2025，Singapore
+@inproceedings{xu2025speculative_kd,
+ author = {Wenda Xu and
+                  Rujun Han and
+                  Zifeng Wang and
+                  Long T. Le and
+                  Dhruv Madeka and
+                  Lei Li and
+                  William Yang Wang and
+                  Rishabh Agarwal and
+                  Chen{-}Yu Lee and
+                  Tomas Pfister},
+ title = {Speculative Knowledge Distillation: Bridging the Teacher-Student Gap Through Interleaved Sampling},
+ booktitle = {Proceedings of the 13th International Conference on Learning Representations (ICLR 2025)},
+ address = {Singapore},
+ year = {2025}
+}
+
+
+% ========================
+% 2.2 On-Policy Distillation (OPD)
+% ========================
+
+% checked
+@article{lu2025onpolicydistillation,
+ author = {Kevin Lu and {Thinking Machines Lab}},
+ title = {On-Policy Distillation},
+ journal = {Thinking Machines Lab: Connectionism},
+ year = {2025},
+ note = {\url{https://thinkingmachines.ai/blog/on-policy-distillation}},
+ doi = {10.64434/tml.20251026}
+}
+
+% checked
+@inproceedings{agarwal2024onpolicy_opsd,
+ author = {Rishabh Agarwal and
+                  Nino Vieillard and
+                  Yongchao Zhou and
+                  Piotr Stanczyk and
+                  Sabela Ramos Garea and
+                  Matthieu Geist and
+                  Olivier Bachem},
+ title = {On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes},
+ booktitle = {Proceedings of the 12th International Conference on Learning Representations (ICLR 2024)},
+ address = {Vienna, Austria},
+ year = {2024}
+}
+
+% checked
+@inproceedings{ko2024distillm_opd,
+ author = {Jongwoo Ko and Sungnyun Kim and Tianyi Chen and Se-Young Yun},
+ title = {{DistiLLM}: Towards Streamlined Distillation for Large Language Models},
+ booktitle = {Proceedings of the 41st International Conference on Machine Learning (ICML 2024)},
+ volume = {235},
+ address = {Vienna, Austria},
+ year = {2024}
+}
+
+% checked
+@article{ye2026blackbox,
+ author = {Tianzhu Ye and Li Dong and Zewen Chi and Xun Wu and Shaohan Huang and Furu Wei},
+ title = {Black-Box On-Policy Distillation of Large Language Models},
+ journal = {arXiv preprint},
+ volume = {arXiv:2511.10643},
+ year = {2025},
+ publisher = {arXiv},
+}
+
+% checked
+@article{song2026survey,
+ author = {Mingyang Song and Mao Zheng},
+ title = {A Survey of On-Policy Distillation for Large Language Models},
+ journal = {arXiv preprint},
+ volume = {arXiv:2604.00626},
+ year = {2026},
+ publisher = {arXiv},
+}
+
+% ========================
+% 2.3 跨分词器知识蒸馏（Cross-Tokenizer KD）
+% ========================
+
+% checked
+@article{boizard2025uld,
+ author = {Nicolas Boizard and Kevin El Haddad and C{\'{e}}line Hudelot and Pierre Colombo},
+ title = {Towards Cross-Tokenizer Distillation: The Universal Logit Distillation Loss for {LLMs}},
+ journal = {Transactions on Machine Learning Research (TMLR)},
+ year = {2025},
+ publisher = {Trans. Mach. Learn. Res.}
+}
+
+% checked
+@inproceedings{cui2025multilevel,
+ author = {Xiao Cui and Mo Zhu and Yulei Qin and Liang Xie and Wengang Zhou and Houqiang Li},
+ title = {Multi-Level Optimal Transport for Universal Cross-Tokenizer Knowledge Distillation on Language Models},
+ booktitle = {Proceedings of the 39th AAAI Conference on Artificial Intelligence (AAAI 2025)},
+ address = {Philadelphia, PA},
+ year = {2025}
+}
+
+% checked
+@inproceedings{minixhofer2025alm,
+ author = {Benjamin Minixhofer and Ivan Vuli{\'c} and Edoardo Maria Ponti},
+ title = {Universal Cross-Tokenizer Distillation via Approximate Likelihood Matching},
+ booktitle = {Advances in Neural Information Processing Systems 38 (NeurIPS 2025)},
+ year = {2025},
+}
+
+
+% checked
+@inproceedings{ngo2026ctpd,
+ author = {Truong Nguyen and Phi Van Dat and Ngan Nguyen and Linh Ngo Van and Trung Le and Thanh Hong Nguyen},
+ title = {{CTPD}: Cross-Tokenizer Preference Distillation},
+ booktitle = {Proceedings of the 40th AAAI Conference on Artificial Intelligence (AAAI 2026)},
+ address = {Philadelphia, PA, USA},
+ year = {2026}
+}
+
+% checked
+@article{singh2026bld,
+ author = {Avyav Kumar Singh and Yen-Chen Wu and Alexandru Cioba and Alberto Bernacchia and Davide Buffelli},
+ title = {Cross-Tokenizer {LLM} Distillation through a Byte-Level Interface},
+ journal = {arXiv preprint},
+ volume = {arXiv:2604.07466},
+ year = {2026},
+ publisher = {arXiv},
+}
+
+% checked
+@inproceedings{chen2025cdm,
+ author = {Yijie Chen and Yijin Liu and Fandong Meng and Yufeng Chen and Jinan Xu and Jie Zhou},
+ title = {Enhancing Cross-Tokenizer Knowledge Distillation with Contextual Dynamical Mapping},
+ booktitle = {Findings of the Association for Computational Linguistics: {ACL} 2025},
+ pages = {8005--8018},
+ address = {Vienna, Austria},
+ year = {2025}
+}
+
+
+% ========================
+% 2.4 训练--推理不匹配 / Exposure Bias
+% ========================
+
+% checked — Scheduled Sampling：最早讨论序列生成中 train-inference mismatch 的工作
+% arXiv:1506.03099，发表于 NeurIPS 2015
+@inproceedings{bengio2015scheduled_eb,
+ author = {Samy Bengio and Oriol Vinyals and Navdeep Jaitly and Noam Shazeer},
+ title = {Scheduled Sampling for Sequence Prediction with Recurrent Neural Networks},
+ booktitle = {Advances in Neural Information Processing Systems 28 (NeurIPS 2015)},
+ year = {2015},
+}
+
+% checked — ACL 2019 Best Paper：在 NMT 中明确刻画 exposure bias 并提出缓解方案
+% arXiv:1906.02448
+@inproceedings{zhang2019bridging_eb,
+ author = {Wen Zhang and Yang Feng and Fandong Meng and Di You and Qun Liu},
+ title = {Bridging the Gap between Training and Inference for Neural Machine Translation},
+ booktitle = {Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics ({ACL} 2019)},
+ pages = {4334--4343},
+ address = {Florence, Italy},
+ year = {2019},
+}
+
+% checked — DAgger：interactive imitation learning 的理论基础，OPD 的方法论来源
+% arXiv:1011.0686，发表于 AISTATS 2011
+@inproceedings{ross2011dagger_eb,
+ author = {St{\'{e}}phane Ross and Geoffrey J. Gordon and J. Andrew Bagnell},
+ title = {A Reduction of Imitation Learning and Structured Prediction to No-Regret Online Learning},
+ booktitle = {Proceedings of the 14th International Conference on Artificial Intelligence and Statistics (AISTATS 2011)},
+ pages = {627--635},
+ address = {Fort Lauderdale, FL, USA},
+ year = {2011},
+}
+
+
+% ========================
+% 2.5 LLM 模型压缩综述
+% ========================
+
+% checked — LLM 压缩综述，涵盖量化、剪枝、知识蒸馏
+% arXiv:2308.07633，已发表于 TACL
+@article{zhu2024compression_mc,
+ author = {Xunyu Zhu and Jian Li and Yong Liu and Can Ma and Weiping Wang},
+ title = {A Survey on Model Compression for Large Language Models},
+ journal = {Transactions of the Association for Computational Linguistics (TACL)},
+ year = {2024},
+ publisher = {MIT Press},
+}
+
+
+% ========================
+% 2.6 LLM 知识蒸馏综述（新增）
+% ========================
+
+% checked — LLM 知识蒸馏最全面综述，涵盖 algorithm / skill / verticalization
+% arXiv:2402.13116，43 页
+@article{xu2024surveykdllm_kd,
+ author = {Xiaohan Xu and Ming Li and Chongyang Tao and Tao Shen and Reynold Cheng and Jinyang Li and Can Xu and Dacheng Tao and Tianyi Zhou},
+ title = {A Survey on Knowledge Distillation of Large Language Models},
+ journal = {arXiv preprint},
+ volume = {arXiv:2402.13116},
+ year = {2024},
+ publisher = {arXiv},
+}
+
+
+% ========================
+% 2.7 LLM 压缩实践（新增）
+% ========================
+
+% checked — Minitron：NVIDIA 剪枝+蒸馏 产出紧凑 LLM 的工业实践
+% arXiv:2407.14679，NeurIPS 2024
+@inproceedings{muralidharan2024minitron_mc,
+ author = {Saurav Muralidharan and Sharath Turuvekere Sreenivas and Raviraj Joshi and Marcin Chochowski and Mostofa Patwary and Mohammad Shoeybi and Bryan Catanzaro and Jan Kautz and Pavlo Molchanov},
+ title = {Compact Language Models via Pruning and Knowledge Distillation},
+ booktitle = {Advances in Neural Information Processing Systems 37 (NeurIPS 2024)},
+ year = {2024},
+}
+
+
+% ========================
+% 2.8 Entropy-Aware OPD（新增）
+% ========================
+
+% checked — Entropy-Aware On-Policy Distillation：reverse KL 的改进
+% arXiv:2603.07079
+@article{jin2026entropy_opd,
+ author = {Woogyeol Jin and Taywon Min and Yongjin Yang and Swanand Ravindra Kadhe and Yi Zhou and Dennis Wei and Nathalie Baracaldo and Kimin Lee},
+ title = {Entropy-Aware On-Policy Distillation of Language Models},
+ journal = {arXiv preprint},
+ volume = {arXiv:2603.07079},
+ year = {2026},
+ publisher = {arXiv},
+}
+
+
+% ========================
+% Benchmark 论文
+% ========================
+
+% checked — MATH-500
+% 由 Lightman et al. 2023 从 MATH test set 中筛选的 500 题代表性子集
+% arXiv:2305.20050, NeurIPS 2023
+@inproceedings{lightman2023math500,
+ author = {Hunter Lightman and Vineet Kosaraju and Yura Burda and Harri Edwards and Bowen Baker and Teddy Lee and Jan Leike and John Schulman and Ilya Sutskever and Karl Cobbe},
+ title = {Let's Verify Step by Step},
+ booktitle = {Proceedings of the 12th International Conference on Learning Representations (ICLR 2024)},
+ year = {2024},
+}
+
+% checked — LiveCodeBench
+% arXiv:2403.07974, ICLR 2025
+@inproceedings{jain2024livecodebench,
+ author = {Naman Jain and King Han and Alex Gu and Wen-Ding Li and Fanjia Yan and Tianjun Zhang and Sida Wang and Armando Solar-Lezama and Koushik Sen and Ion Stoica},
+ title = {{LiveCodeBench}: Holistic and Contamination Free Evaluation of Large Language Models for Code},
+ booktitle = {Proceedings of the 13th International Conference on Learning Representations (ICLR 2025)},
+ year = {2025},
+}
+
+% checked — HumanEval
+@article{chen2021evaluating_humaneval,
+ author = {Mark Chen and Jerry Tworek and Heewoo Jun and Qiming Yuan and Henrique Ponde de Oliveira Pinto and Jared Kaplan and Harri Edwards and Yuri Burda and Nicholas Joseph and Greg Brockman and Alex Ray and Raul Puri and Gretchen Krueger and Michael Petrov and Heidy Khlaaf and Girish Sastry and Pamela Mishkin and Brooke Chan and Scott Gray and Nick Ryder and Mikhail Pavlov and Alethea Power and Lukasz Kaiser and Mohammad Bavarian and Clemens Winter and Philippe Tillet and Felipe Petroski Such and Dave Cummings and Matthias Plappert and Fotios Chantzis and Elizabeth Barnes and Ariel Herbert-Voss and William Hebgen Guss and Alex Nichol and Alex Paino and Nikolas Tezak and Jie Tang and Igor Babuschkin and Suchir Balaji and Shantanu Jain and William Saunders and Christopher Hesse and Andrew N. Carr and Jan Leike and Josh Achiam and Vedant Misra and Evan Morikawa and Alec Radford and Matthew Knight and Miles Brundage and Mira Murati and Katie Mayer and Peter Welinder and Bob McGrew and Dario Amodei and Sam McCandlish and Ilya Sutskever and Wojciech Zaremba},
+ title = {Evaluating Large Language Models Trained on Code},
+ journal = {arXiv preprint},
+ volume = {arXiv:2107.03374},
+ year = {2021},
+ publisher = {arXiv},
+}
+
+% checked — GSM8K
+@article{cobbe2021training_gms8k,
+ author = {Karl Cobbe and Vineet Kosaraju and Mohammad Bavarian and Mark Chen and Heewoo Jun and Lukasz Kaiser and Matthias Plappert and Jerry Tworek and Jacob Hilton and Reiichiro Nakano and Christopher Hesse and John Schulman},
+ title = {Training Verifiers to Solve Math Word Problems},
+ journal = {arXiv preprint},
+ volume = {arXiv:2110.14168},
+ year = {2021},
+ publisher = {arXiv},
+}
+
+% checked — MBPP
+@article{austin2021program_mbpp,
+ author = {Jacob Austin and Augustus Odena and Maxwell Nye and Maarten Bosma and Henryk Michalewski and David Dohan and Ellen Jiang and Carrie Cai and Michael Terry and Quoc Le and Charles Sutton},
+ title = {Program Synthesis with Large Language Models},
+ journal = {arXiv preprint},
+ volume = {arXiv:2108.07732},
+ year = {2021},
+ publisher = {arXiv},
+}
+
+% ========================
+% 训练数据集 & 教师/学生模型
+% ========================
+
+% checked — GSM8K（alias key，与 cobbe2021training_gms8k 指向同一论文）
+% arXiv:2110.14168
+@article{cobbe2021gsm8k,
+ author = {Karl Cobbe and Vineet Kosaraju and Mohammad Bavarian and Mark Chen and Heewoo Jun and Lukasz Kaiser and Matthias Plappert and Jerry Tworek and Jacob Hilton and Reiichiro Nakano and Christopher Hesse and John Schulman},
+ title = {Training Verifiers to Solve Math Word Problems},
+ journal = {arXiv preprint},
+ volume = {arXiv:2110.14168},
+ year = {2021},
+ publisher = {arXiv},
+}
+
+% checked — MATH dataset
+% NeurIPS 2021 Datasets and Benchmarks Track; arXiv:2103.03874
+@inproceedings{hendrycks2021math,
+ author = {Dan Hendrycks and Collin Burns and Saurav Kadavath and Akul Arora and Steven Basart and Eric Tang and Dawn Song and Jacob Steinhardt},
+ title = {Measuring Mathematical Problem Solving With the {MATH} Dataset},
+ booktitle = {Advances in Neural Information Processing Systems 34 (NeurIPS 2021)},
+ year = {2021},
+}
+
+% checked — Orca-Math
+% arXiv:2402.14830
+@article{mitra2024orcamath,
+ author = {Arindam Mitra and Hamed Khanpour and Corby Rosset and Ahmed Awadallah},
+ title = {Orca-Math: Unlocking the Potential of {SLMs} in Grade School Math},
+ journal = {arXiv preprint},
+ volume = {arXiv:2402.14830},
+ year = {2024},
+ publisher = {arXiv},
+}
+
+% checked — OpenMathInstruct-1
+% arXiv:2402.10176
+@article{toshniwal2024openmathinstruct,
+ author = {Shubham Toshniwal and Ivan Moshkov and Sean Narenthiran and Daria Gitman and Fei Jia and Igor Gitman},
+ title = {{OpenMathInstruct-1}: A 1.8 Million Math Instruction Tuning Dataset},
+ journal = {arXiv preprint},
+ volume = {arXiv:2402.10176},
+ year = {2024},
+ publisher = {arXiv},
+}
+
+% checked — OpenCodeInstruct
+% arXiv:2504.04030, NVIDIA
+@article{ahmad2025opencodeinstruct,
+ author = {Wasi Uddin Ahmad and Aleksander Ficek and Mehrzad Samadi and Jocelyn Huang and Vahid Noroozi and Somshubra Majumdar and Boris Ginsburg},
+ title = {{OpenCodeInstruct}: A Large-scale Instruction Tuning Dataset for Code {LLMs}},
+ journal = {arXiv preprint},
+ volume = {arXiv:2504.04030},
+ year = {2025},
+ publisher = {arXiv},
+}
+
+% checked — KodCode
+% arXiv:2503.02951
+@article{xu2025kodcode,
+ author = {Zhangchen Xu and Yang Liu and Yueqin Yin and Mingyuan Zhou and Radha Poovendran},
+ title = {{KodCode}: A Diverse, Challenging, and Verifiable Synthetic Dataset for Coding},
+ journal = {arXiv preprint},
+ volume = {arXiv:2503.02951},
+ year = {2025},
+ publisher = {arXiv},
+}
+
+% checked — TACO: Topics in Algorithmic COde generation dataset
+% arXiv:2312.14852
+@article{li2023taco,
+ author = {Rongao Li and Jie Fu and Bo-Wen Zhang and Tao Huang and Zhihong Sun and Chen Lyu and Guang Liu and Zhi Jin and Ge Li},
+ title = {{TACO}: Topics in Algorithmic {CO}de Generation Dataset},
+ journal = {arXiv preprint},
+ volume = {arXiv:2312.14852},
+ year = {2023},
+ publisher = {arXiv},
+}
+
+% checked — CodeContests / AlphaCode
+% arXiv:2203.07814; published in Science 2022
+@article{li2022alphacode,
+ author = {Yujia Li and David Choi and Junyoung Chung and Nate Kushman and Julian Schrittwieser and R{\'{e}}mi Leblond and Tom Eccles and James Keeling and Felix Gimeno and Agustin Dal Lago and Thomas Hubert and Peter Choy and Cyprien de Masson d'Autume and Igor Babuschkin and Xinyun Chen and Po-Sen Huang and Johannes Welbl and Sven Gowal and Alexey Cherepanov and James Molloy and Daniel J. Mankowitz and Esme Sutherland Robson and Pushmeet Kohli and Nando de Freitas and Koray Kavukcuoglu and Oriol Vinyals},
+ title = {Competition-Level Code Generation with {AlphaCode}},
+ journal = {Science},
+ volume = {378},
+ number = {6624},
+ pages = {1092--1097},
+ year = {2022},
+ publisher = {American Association for the Advancement of Science},
+}
+
+% checked — Qwen2.5 Technical Report
+% arXiv:2412.15115
+@article{qwen25,
+ author = {An Yang and
+                  Baosong Yang and
+                  Beichen Zhang and
+                  Binyuan Hui and
+                  Bo Zheng and
+                  Bowen Yu and
+                  Chengyuan Li and
+                  Dayiheng Liu and
+                  Fei Huang and
+                  Haoran Wei and
+                  Huan Lin and
+                  Jian Yang and
+                  Jianhong Tu and
+                  Jianwei Zhang and
+                  Jianxin Yang and
+                  Jiaxi Yang and
+                  Jingren Zhou and
+                  Junyang Lin and
+                  Kai Dang and
+                  Keming Lu and
+                  Keqin Bao and
+                  Kexin Yang and
+                  Le Yu and
+                  Mei Li and
+                  Mingfeng Xue and
+                  Pei Zhang and
+                  Qin Zhu and
+                  Rui Men and
+                  Runji Lin and
+                  Tianhao Li and
+                  Tingyu Xia and
+                  Xingzhang Ren and
+                  Xuancheng Ren and
+                  Yang Fan and
+                  Yang Su and
+                  Yichang Zhang and
+                  Yu Wan and
+                  Yuqiong Liu and
+                  Zeyu Cui and
+                  Zhenru Zhang and
+                  Zihan Qiu},
+ title = {{Qwen2.5} Technical Report},
+ journal = {arXiv preprint},
+ volume = {arXiv:2412.15115},
+ year = {2024},
+ publisher = {arXiv},
+}
+
+% checked — Gemma 2
+% arXiv:2408.00118, NeurIPS 2024
+@article{gemma2,
+ author = {Gemma Team},
+ title = {Gemma 2: Improving Open Language Models at a Practical Size},
+ journal = {arXiv preprint},
+ volume = {arXiv:2408.00118},
+ year = {2024},
+ publisher = {arXiv},
+}
+
+% checked — Phi-4-Mini Technical Report
+% arXiv:2503.01743, Microsoft
+@article{phi4mini,
+ author = {Microsoft: Abdelrahman Abouelenin and
+                  Atabak Ashfaq and
+                  Adam Atkinson and
+                  Hany Awadalla and
+                  Nguyen Bach and
+                  Jianmin Bao and
+                  Alon Benhaim and
+                  Martin Cai and
+                  Vishrav Chaudhary and
+                  Congcong Chen and
+                  Dong Chen and
+                  Dongdong Chen and
+                  Jun{-}Kun Chen and
+                  Weizhu Chen and
+                  Yen{-}Chun Chen and
+                  Yi{-}ling Chen and
+                  Qi Dai and
+                  Xiyang Dai and
+                  Ruchao Fan and
+                  Mei Gao and
+                  Min Gao and
+                  Amit Garg and
+                  Abhishek Goswami and
+                  Junheng Hao and
+                  Amr Hendy and
+                  Yuxuan Hu and
+                  Xin Jin and
+                  Mahmoud Khademi and
+                  Dongwoo Kim and
+                  Young Jin Kim and
+                  Gina Lee and
+                  Jinyu Li and
+                  Yunsheng Li and
+                  Chen Liang and
+                  Xihui Lin and
+                  Zeqi Lin and
+                  Mengchen Liu and
+                  Yang Liu and
+                  Gilsinia Lopez and
+                  Chong Luo and
+                  Piyush Madan and
+                  Vadim Mazalov and
+                  Arindam Mitra and
+                  Ali Mousavi and
+                  Anh Nguyen and
+                  Jing Pan and
+                  Daniel Perez{-}Becker and
+                  Jacob Platin and
+                  Thomas Portet and
+                  Kai Qiu and
+                  Bo Ren and
+                  Liliang Ren and
+                  Sambuddha Roy and
+                  Ning Shang and
+                  Yelong Shen and
+                  Saksham Singhal and
+                  Subhojit Som and
+                  Xia Song and
+                  Tetyana Sych and
+                  Praneetha Vaddamanu and
+                  Shuohang Wang and
+                  Yiming Wang and
+                  Zhenghao Wang and
+                  Haibin Wu and
+                  Haoran Xu and
+                  Weijian Xu and
+                  Yifan Yang and
+                  Ziyi Yang and
+                  Donghan Yu and
+                  Ishmam Zabir and
+                  Jianwen Zhang and
+                  Li Lyna Zhang and
+                  Yunan Zhang and
+                  Xiren Zhou},
+ title = {Phi-4-Mini Technical Report: Compact yet Powerful Multimodal Language Models via Mixture-of-{LoRA}s},
+ journal = {arXiv preprint},
+ volume = {arXiv:2503.01743},
+ year = {2025},
+ publisher = {arXiv},
+}
+
+% ========================
+% Introduction 新增引用 (2024--2026)
+% ========================
+
+% DeepSeek-R1: 大规模 RL + 蒸馏的 reasoning model
+% arXiv:2501.12948, Nature 2025
+@article{deepseek2025r1,
+ author = {Daya Guo and
+                  Dejian Yang and
+                  Haowei Zhang and
+                  Junxiao Song and
+                  Peiyi Wang and
+                  Qihao Zhu and
+                  Runxin Xu and
+                  Ruoyu Zhang and
+                  Shirong Ma and
+                  Xiao Bi and
+                  Xiaokang Zhang and
+                  Xingkai Yu and
+                  Yu Wu and
+                  Z. F. Wu and
+                  Zhibin Gou and
+                  Zhihong Shao and
+                  Zhuoshu Li and
+                  Ziyi Gao and
+                  Aixin Liu and
+                  Bing Xue and
+                  Bingxuan Wang and
+                  Bochao Wu and
+                  Bei Feng and
+                  Chengda Lu and
+                  Chenggang Zhao and
+                  Chengqi Deng and
+                  Chong Ruan and
+                  Damai Dai and
+                  Deli Chen and
+                  Dongjie Ji and
+                  Erhang Li and
+                  Fangyun Lin and
+                  Fucong Dai and
+                  Fuli Luo and
+                  Guangbo Hao and
+                  Guanting Chen and
+                  Guowei Li and
+                  Hao Zhang and
+                  Hanwei Xu and
+                  Honghui Ding and
+                  Huazuo Gao and
+                  Hui Qu and
+                  Hui Li and
+                  Jianzhong Guo and
+                  Jiashi Li and
+                  Jingchang Chen and
+                  Jingyang Yuan and
+                  Jinhao Tu and
+                  Junjie Qiu and
+                  Junlong Li and
+                  J. L. Cai and
+                  Jiaqi Ni and
+                  Jian Liang and
+                  Jin Chen and
+                  Kai Dong and
+                  Kai Hu and
+                  Kaichao You and
+                  Kaige Gao and
+                  Kang Guan and
+                  Kexin Huang and
+                  Kuai Yu and
+                  Lean Wang and
+                  Lecong Zhang and
+                  Liang Zhao and
+                  Litong Wang and
+                  Liyue Zhang and
+                  Lei Xu and
+                  Leyi Xia and
+                  Mingchuan Zhang and
+                  Minghua Zhang and
+                  Minghui Tang and
+                  Mingxu Zhou and
+                  Meng Li and
+                  Miaojun Wang and
+                  Mingming Li and
+                  Ning Tian and
+                  Panpan Huang and
+                  Peng Zhang and
+                  Qiancheng Wang and
+                  Qinyu Chen and
+                  Qiushi Du and
+                  Ruiqi Ge and
+                  Ruisong Zhang and
+                  Ruizhe Pan and
+                  Runji Wang and
+                  R. J. Chen and
+                  R. L. Jin and
+                  Ruyi Chen and
+                  Shanghao Lu and
+                  Shangyan Zhou and
+                  Shanhuang Chen and
+                  Shengfeng Ye and
+                  Shiyu Wang and
+                  Shuiping Yu and
+                  Shunfeng Zhou and
+                  Shuting Pan and
+                  S. S. Li and
+                  Shuang Zhou and
+                  Shaoqing Wu and
+                  Tao Yun and
+                  Tian Pei and
+                  Tianyu Sun and
+                  Tao Wang and
+                  Wangding Zeng and
+                  Wen Liu and
+                  Wenfeng Liang and
+                  Wenjun Gao and
+                  Wenqin Yu and
+                  Wentao Zhang and
+                  W. L. Xiao and
+                  Wei An and
+                  Xiaodong Liu and
+                  Xiaohan Wang and
+                  Xiaokang Chen and
+                  Xiaotao Nie and
+                  Xin Cheng and
+                  Xin Liu and
+                  Xin Xie and
+                  Xingchao Liu and
+                  Xinyu Yang and
+                  Xinyuan Li and
+                  Xuecheng Su and
+                  Xuheng Lin and
+                  X. Q. Li and
+                  Xiangyue Jin and
+                  Xiaojin Shen and
+                  Xiaosha Chen and
+                  Xiaowen Sun and
+                  Xiaoxiang Wang and
+                  Xinnan Song and
+                  Xinyi Zhou and
+                  Xianzu Wang and
+                  Xinxia Shan and
+                  Y. K. Li and
+                  Y. Q. Wang and
+                  Y. X. Wei and
+                  Yang Zhang and
+                  Yanhong Xu and
+                  Yao Li and
+                  Yao Zhao and
+                  Yaofeng Sun and
+                  Yaohui Wang and
+                  Yi Yu and
+                  Yichao Zhang and
+                  Yifan Shi and
+                  Yiliang Xiong and
+                  Ying He and
+                  Yishi Piao and
+                  Yisong Wang and
+                  Yixuan Tan and
+                  Yiyang Ma and
+                  Yiyuan Liu and
+                  Yongqiang Guo and
+                  Yuan Ou and
+                  Yuduan Wang and
+                  Yue Gong and
+                  Yuheng Zou and
+                  Yujia He and
+                  Yunfan Xiong and
+                  Yuxiang Luo and
+                  Yuxiang You and
+                  Yuxuan Liu and
+                  Yuyang Zhou and
+                  Y. X. Zhu and
+                  Yanping Huang and
+                  Yaohui Li and
+                  Yi Zheng and
+                  Yuchen Zhu and
+                  Yunxian Ma and
+                  Ying Tang and
+                  Yukun Zha and
+                  Yuting Yan and
+                  Z. Z. Ren and
+                  Zehui Ren and
+                  Zhangli Sha and
+                  Zhe Fu and
+                  Zhean Xu and
+                  Zhenda Xie and
+                  Zhengyan Zhang and
+                  Zhewen Hao and
+                  Zhicheng Ma and
+                  Zhigang Yan and
+                  Zhiyu Wu and
+                  Zihui Gu and
+                  Zijia Zhu and
+                  Zijun Liu and
+                  Zilin Li and
+                  Ziwei Xie and
+                  Ziyang Song and
+                  Zizheng Pan and
+                  Zhen Huang and
+                  Zhipeng Xu and
+                  Zhongyu Zhang and
+                  Zhen Zhang},
+ title = {{DeepSeek-R1}: Incentivizing Reasoning Capability in {LLMs} via Reinforcement Learning},
+ journal = {Nature},
+ year = {2025},
+ publisher = {Springer Nature},
+}
+
+% Rethinking OPD dynamics：OPD 的机理分析
+% arXiv:2604.13016
+@article{li2026rethinkingopd,
+ author = {Yaxuan Li and Yuxin Zuo and Bingxiang He and Jinqian Zhang and Chaojun Xiao and Cheng Qian and Tianyu Yu and Huan-ang Gao and Wenkai Yang and Zhiyuan Liu and Ning Ding},
+ title = {Rethinking On-Policy Distillation of Large Language Models: Phenomenology, Mechanism, and Recipe},
+ journal = {arXiv preprint},
+ volume = {arXiv:2604.13016},
+ year = {2026},
+ publisher = {arXiv},
+}
+
+% SelecTKD: 选择性 token 加权 KD
+% arXiv:2510.24021
+@article{huang2025selectkd,
+ author = {Haiduo Huang and Jiangcheng Song and Yadong Zhang and Pengju Ren},
+ title = {{SelecTKD}: Selective Token-Weighted Knowledge Distillation for {LLMs}},
+ journal = {arXiv preprint},
+ volume = {arXiv:2510.24021},
+ year = {2025},
+ publisher = {arXiv},
+}
+
+% Diversity-Aware RKL: 改进 reverse KL 的多样性问题
+% arXiv:2604.00223
+@article{luong2026drkl,
+ author = {Hoang-Chau Luong and Dat Ba Tran and Lingwei Chen},
+ title = {Diversity-Aware Reverse Kullback-Leibler Divergence for Large Language Model Distillation},
+ journal = {arXiv preprint},
+ volume = {arXiv:2604.00223},
+ year = {2026},
+ publisher = {arXiv},
+}
+
+% Adaptive KL (AKL): 自适应结合 FKL 和 RKL
+% arXiv:2404.02657, COLING 2025
+@inproceedings{wu2025akl,
+ author = {Taiqiang Wu and Chaofan Tao and Jiahao Wang and Zhe Zhao and Ngai Wong},
+ title = {Rethinking Kullback-Leibler Divergence in Knowledge Distillation for Large Language Models},
+ booktitle = {Proceedings of the 31st International Conference on Computational Linguistics (COLING 2025)},
+ year = {2025},
+}
+
+% Cross-Tokenizer Likelihood Scoring: BPE递归结构实现跨词表精确打分
+% arXiv:2512.14954, ICLR 2026
+@inproceedings{phan2026ctls,
+ author = {Buu Phan and Ashish Khisti and Karen Ullrich},
+ title = {Cross-Tokenizer Likelihood Scoring Algorithms for Language Model Distillation},
+ booktitle = {Proceedings of the 14th International Conference on Learning Representations (ICLR 2026)},
+ address = {Rio de Janeiro, Brazil},
+ year = {2026},
+}
+
+% SequenceMatch: 将序列生成建模为模仿学习
+% arXiv:2306.05426, ICLR 2024
+@inproceedings{cideron2024sequencematch,
+ author = {Chris Cundy and Stefano Ermon},
+ title = {{SequenceMatch}: Imitation Learning for Autoregressive Sequence Modelling with Backtracking},
+ booktitle = {Proceedings of the 12th International Conference on Learning Representations (ICLR 2024)},
+ address = {Vienna, Austria},
+ year = {2024},
+}
+
+% GAKD: 对抗式 sequence-level KD
+% NeurIPS 2025
+@inproceedings{liu2025gakd,
+ author = {Yuan Pu and Shutong Lin and Xi Chen and Seunggeun Kim and Sungyoung Lee and Zhuolun He and David Z. Pan and Bei Yu},
+ title = {{GAKD}: Generative Adversarial Knowledge Distillation for Large Language Models},
+ url={https://openreview.net/forum?id=9pfWYxYHAn},
+ year = {2026},
+}
+
+@article{yang2024kd_survey,
+    author = {Chuanpeng Yang and Wang Lu and Yao Zhu and Yidong Wang and Qian Chena and Chenlong Gao and Bingjie Yan and Yiqiang Chen},
+    title = {Survey on Knowledge Distillation for Large Language Models: Methods, Evaluation, and Application},
+    journal = {arXiv preprint},
+    volume = {arXiv:2407.01885},
+    year = {2024},
+    publisher = {arXiv},
+}
+
+% DistiLLM-2: Contrastive OPD
+% arXiv:2503.07067, ICML 2025 Spotlight
+@inproceedings{ko2025distillm2_opd,
+ author = {Jongwoo Ko and Tianyi Chen and Sungnyun Kim and Tianyu Ding and Luming Liang and Ilya Zharkov and Se-Young Yun},
+ title = {{DistiLLM-2}: A Contrastive Approach Boosts the Distillation of {LLMs}},
+ booktitle = {Proceedings of the 42nd International Conference on Machine Learning (ICML 2025)},
+ year = {2025},
+}
+
+% Lightning OPD: Offline on-policy distillation
+% arXiv:2604.13010
+@article{zhang2026lightningopd,
+ author = {Yecheng Wu and Song Han and Hai Cai},
+ title = {Lightning {OPD}: Efficient Post-Training for Large Reasoning Models with Offline On-Policy Distillation},
+ journal = {arXiv preprint},
+ volume = {arXiv:2604.13010},
+ year = {2026},
+ publisher = {arXiv},
+}
+
+% DSKDv2: Dual-Space Framework for General KD of LLMs
+% arXiv:2504.11426
+@article{zhang2025dskdv2,
+ author = {Xue Zhang and Songming Zhang and Yunlong Liang and Fandong Meng and Yufeng Chen and Jinan Xu and Jie Zhou},
+ title = {A Dual-Space Framework for General Knowledge Distillation of Large Language Models},
+ journal = {arXiv preprint},
+ volume = {arXiv:2504.11426},
+ year = {2025},
+ publisher = {arXiv},
+}
+
+% CSD: Concrete Score Distillation
+% arXiv:2509.25837
+@article{kim2025csd,
+ author = {Yeongmin Kim and Donghyeok Shin and Mina Kang and Byeonghu Na and Il-Chul Moon},
+ title = {Distillation of Large Language Models via Concrete Score Matching},
+ journal = {arXiv preprint},
+ volume = {arXiv:2509.25837},
+ year = {2025},
+ publisher = {arXiv},
+}
+
+% Stable OPD: Adaptive target reformulation
+% arXiv:2601.07155
+@article{liu2026stableopd,
+ author = {Ijun Jang and Jewon Yeom and Juan Yeo and Hyunggu Lim and Taesup Kim},
+ title = {Stable On-Policy Distillation through Adaptive Target Reformulation},
+ journal = {arXiv preprint},
+ volume = {arXiv:2601.07155},
+ year = {2026},
+ publisher = {arXiv},
+}
+
+
+
+@inproceedings{zhang2024dskd,
+  author    = {Songming Zhang and Xue Zhang and Zengkui Sun and Yufeng Chen and Jinan Xu},
+  title     = {Dual-Space Knowledge Distillation for Large Language Models},
+  booktitle = {Proceedings of the 2024 Conference on Empirical Methods in Natural Language Processing (EMNLP 2024)},
+  pages     = {18164--18181},
+  address   = {Miami, Florida, USA},
+  year      = {2024}
+}
+
+@inproceedings{tsiapali2026dskdkqm,
+  author    = {Stella Eva Tsiapali and Cong-Thanh Do and Kate Knill},
+  title     = {Dual-Space Knowledge Distillation with Key-Query Matching for Large Language Models with Vocabulary Mismatch},
+  booktitle = {Proceedings of the IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP 2026)},
+  year      = {2026}
+}
+
+
+@article{le2025cot2align,
+  author  = {Anh Duc Le and Tu Vu and Nam Le Hai and Nguyen Thi Ngoc Diep and Linh Ngo Van and Trung Le and Thien Huu Nguyen},
+  title   = {{CoT2Align}: Cross-Chain of Thought Distillation via Optimal Transport Alignment for Language Models with Different Tokenizers},
+  journal = {arXiv preprint},
+  volume  = {arXiv:2502.16806},
+  year    = {2025}
+}
+
+@article{shin2025vocagnolm,
+  author  = {Haebin Shin and Lei Ji and Xiao Liu and Yeyun Gong},
+  title   = {Overcoming Vocabulary Mismatch: Vocabulary-agnostic Teacher Guided Language Modeling},
+  journal = {arXiv preprint},
+  volume  = {arXiv:2503.19123},
+  year    = {2025}
+}
+
+% checked — ImitKD: 最早从 imitation learning 视角做 autoregressive KD
+% arXiv:2009.07253, EMNLP 2020
+@inproceedings{lin2020imitkd,
+  author    = {Alexander Lin and Jeremy Wohlwend and Howard Chen and Tao Lei},
+  title     = {Autoregressive Knowledge Distillation through Imitation Learning},
+  booktitle = {Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP 2020)},
+  pages     = {6121--6133},
+  address   = {Online Event},
+  year      = {2020},
+}
+
+% ========================
+% Evaluation / Decoding
+% ========================
+
+% checked — Nucleus Sampling (top-p decoding)
+% arXiv:1904.09751, ICLR 2020
+@inproceedings{holtzman2020nucleus,
+  author    = {Ari Holtzman and Jan Buys and Li Du and Maxwell Forbes and Yejin Choi},
+  title     = {The Curious Case of Neural Text Degeneration},
+  booktitle = {Proceedings of the 8th International Conference on Learning Representations (ICLR 2020)},
+  year      = {2020},
+}
+
+% checked — EvalPlus: improved evaluation for code LLMs (MBPP+ and HumanEval+)
+% arXiv:2305.01210, NeurIPS 2023 Datasets and Benchmarks
+@inproceedings{liu2024evalplus,
+  author    = {Jiawei Liu and Chunqiu Steven Xia and Yuyao Wang and Lingming Zhang},
+  title     = {Is Your Code Generated by {ChatGPT} Really Correct? Rigorous Evaluation of Large Language Models for Code Generation},
+  booktitle = {Advances in Neural Information Processing Systems 36 (NeurIPS 2023)},
+  year      = {2023},
+}
+
+% checked — Cosine annealing learning rate schedule
+% arXiv:1608.03983, ICLR 2017
+@inproceedings{loshchilov2017sgdr,
+  author    = {Ilya Loshchilov and Frank Hutter},
+  title     = {{SGDR}: Stochastic Gradient Descent with Warm Restarts},
+  booktitle = {Proceedings of the 5th International Conference on Learning Representations (ICLR 2017)},
+  year      = {2017},
+}
+
+% checked — DeepSpeed ZeRO
+% arXiv:1910.02054, SC 2020
+@inproceedings{rajbhandari2020zero,
+  author    = {Samyam Rajbhandari and Jeff Rasley and Olatunji Ruwase and Yuxiong He},
+  title     = {{ZeRO}: Memory Optimizations Toward Training Trillion Parameter Models},
+  booktitle = {Proceedings of the International Conference for High Performance Computing, Networking, Storage and Analysis (SC 2020)},
+  year      = {2020},
+}
+
+% checked — vLLM: efficient LLM inference
+% arXiv:2309.06180, SOSP 2023
+@inproceedings{kwon2023vllm,
+  author    = {Woosuk Kwon and Zhuohan Li and Sicheng Zuo and Ying Sheng and Lianmin Zheng and Cody Hao Yu and Joseph E. Gonzalez and Hao Zhang and Ion Stoica},
+  title     = {Efficient Memory Management for Large Language Model Serving with {PagedAttention}},
+  booktitle = {Proceedings of the 29th Symposium on Operating Systems Principles (SOSP 2023)},
+  year      = {2023},
+}
+
+@article{wu2016google_nmt,
+ author  = {Yonghui Wu and Mike Schuster and Zhifeng Chen and Quoc V. Le and Mohammad Norouzi and Wolfgang Macherey and Maxim Krikun and Yuan Cao and Qin Gao and Klaus Macherey and Jeff Klingner and Apurva Shah and Melvin Johnson and Xiaobing Liu and {\L}ukasz Kaiser and Stephan Gouws and Yoshikiyo Kato and Taku Kudo and Hideto Kazawa and Keith Stevens and George Kurian and Nishant Patil and Wei Wang and Cliff Young and Jason Smith and Jason Riesa and Alex Rudnick and Oriol Vinyals and Greg Corrado and Macduff Hughes and Jeffrey Dean},
+ title   = {Google's Neural Machine Translation System: Bridging the Gap between Human and Machine Translation},
+ journal = {arXiv preprint},
+ volume  = {arXiv:1609.08144},
+ year    = {2016},
+}
+
+% --- 新增 bib 条目 2: CoPD (arXiv:2604.27083) ---
+% Co-Evolving Policy Distillation，统一 RLVR 和 OPD
+@article{gu2026copd,
+ author = {Naibin Gu and Chenxu Yang and Qingyi Si and Chuanyu Qin and Dingyu Yao and Peng Fu and Zheng Lin and Weiping Wang and Nan Duan and Jiaqi Wang},
+ title = {Co-Evolving Policy Distillation},
+ journal = {arXiv preprint},
+ volume = {arXiv:2604.27083},
+ year = {2026},
+ publisher = {arXiv},
+}
+
+% checked — TIP: Token Importance in On-Policy Distillation
+% arXiv:2604.14084
+@article{xu2026tip_opd,
+  author  = {Yuanda Xu and Hejian Sang and Zhengze Zhou and Ran He and Zhipeng Wang and Alborz Geramifard},
+  title   = {{TIP}: Token Importance in On-Policy Distillation},
+  journal = {arXiv preprint},
+  volume  = {arXiv:2604.14084},
+  year    = {2026},
+  publisher = {arXiv},
+}
+
+% checked — MoL: Mixture of Layers, Knowledge-Based Systems (Elsevier)
+@article{liu2026mol_ct,
+  author  = {Hai An Vu and Minh-Phuc Truong and Tu Vu and Linh Ngo Van},
+  title   = {{MoL}: Mixture of Layers in Cross-Tokenizer Embedding Model Distillation},
+  journal = {Knowledge-Based Systems},
+  year    = {2026},
+  publisher = {Elsevier},
+}
+
+% checked — OPCD: On-Policy Context Distillation (Microsoft Research)
+% arXiv:2602.12275
+@article{ye2026opcd,
+  author  = {Tianzhu Ye and Li Dong and Xun Wu and Shaohan Huang and Furu Wei},
+  title   = {On-Policy Context Distillation for Language Models},
+  journal = {arXiv preprint},
+  volume  = {arXiv:2602.12275},
+  year    = {2026},
+  publisher = {arXiv}
+}
+
+% checked — KDFlow: KD framework with decoupled architecture (BJTU + Tencent)
+% arXiv:2603.01875
+@article{zhang2026kdflow,
+  author  = {Songming Zhang and Xue Zhang and Tong Zhang and Bojie Hu and Yufeng Chen and Jinan Xu},
+  title   = {{KDFlow}: A User-Friendly and Efficient Knowledge Distillation Framework for Large Language Models},
+  journal = {arXiv preprint},
+  volume  = {arXiv:2603.01875},
+  year    = {2026},
+  publisher = {arXiv}
+}
+
+% checked — GOLD: General On-Policy Logit Distillation (HuggingFace)
+% Technical report, 2025
+@article{patino2025gold,
+  author  = {C{\'e}sar Miguel Pati{\~n}o and Kashif Rasul and Quentin Gallou{\'e}dec and Ben Burtenshaw and Sergio Paniego and Vaishakh Srivastav and Thomas Frere and Edward Beeching and Lewis Tunstall and Leandro von Werra and Thomas Wolf},
+  title   = {Unlocking On-Policy Distillation for Any Model Family},
+  journal = {Hugging Face Technical Report},
+  year    = {2025},
+  note    = {\url{https://huggingfaceh4-on-policy-distillation.hf.space/unlocking-on-policy-distillation-for-any-model-family.pdf}}
+}
+
+
+@article{zhong2026sod,
+  title={SOD: Step-wise On-policy Distillation for Small Language Model Agents},
+  author={Qiyong Zhong and Mao Zheng and Mingyang Song and Xin Lin and Jie Sun and Houcheng Jiang and Xiang Wang and Junfeng Fang},  
+  journal = {arXiv preprint},
+  volume  = {arXiv:2605.07725},
+  year    = {2026},
+  publisher = {arXiv}
+}
+
+@inproceedings{sun2025robust,
+  title={Robust Preference Optimization via Dynamic Target Margins},
+  author={Jie Sun and Junkang Wu and Jiancan Wu and Zhibo Zhu and Xingyu Lu and Jun Zhou and Lintao Ma and Xiang Wang},
+  booktitle={Findings of the Association for Computational Linguistics: ACL 2025},
+  pages={5399--5416},
+  year={2025}
+}
+
+@article{li2026agencybench,
+  title={AgencyBench: Benchmarking the Frontiers of Autonomous Agents in 1M-Token Real-World Contexts},
+  author={Keyu Li and Junhao Shi and Yang Xiao and Mohan Jiang and Jie Sun and Yunze Wu and Dayuan Fu and Shijie Xia and Xiaojie Cai and Tianze Xu and Weiye Si and Wenjie Li and Dequan Wang and Pengfei Liu},
+  journal = {arXiv preprint},
+  volume  = {arXiv:2601.11044},
+  year    = {2026},
+  publisher = {arXiv}
+}
+
+@article{xiao2025limi,
+  title={LIMI: Less is More for Agency},
+  author={Yang Xiao and Mohan Jiang and Jie Sun and Keyu Li and Jifan Lin and Yumin Zhuang and Ji Zeng and Shijie Xia and Qishuo Hua and Xuefeng Li and Xiaojie Cai and Tongyu Wang and Yue Zhang and Liming Liu and Xia Wu and Jinlong Hou and Yuan Cheng and Wenjie Li and Xiang Wang and Dequan Wang and Pengfei Liu},
+  journal = {arXiv preprint},
+  volume  = {arXiv:2509.17567},
+  year    = {2025},
+  publisher = {arXiv},
+}
+
+@article{wu2025innovatorbench,
+  title={InnovatorBench: Evaluating Agents' Ability to Conduct Innovative {LLM} Research},
+  author={Yunze Wu and
+                  Dayuan Fu and
+                  Weiye Si and
+                  Zhen Huang and
+                  Mohan Jiang and
+                  Keyu Li and
+                  Shijie Xia and
+                  Jie Sun and
+                  Tianze Xu and
+                  Xiangkun Hu and
+                  Pengrui Lu and
+                  Xiaojie Cai and
+                  Lyumanshan Ye and
+                  Wenhong Zhu and
+                  Yang Xiao and
+                  Pengfei Liu},
+  journal = {arXiv preprint},
+  volume  = {arXiv:2510.27598},
+  year    = {2025},
+  publisher = {arXiv},
+}
+
+@article{zeng2026davincidev,
+  title={daVinci-Dev: Agent-native Mid-training for Software Engineering},
+  author={Ji Zeng and
+                  Dayuan Fu and
+                  Tiantian Mi and
+                  Yumin Zhuang and
+                  Yaxing Huang and
+                  Xuefeng Li and
+                  Lyumanshan Ye and
+                  Muhang Xie and
+                  Qishuo Hua and
+                  Zhen Huang and
+                  Mohan Jiang and
+                  Hanning Wang and
+                  Jifan Lin and
+                  Yang Xiao and
+                  Jie Sun and
+                  Yunze Wu and
+                  Pengfei Liu},
+  journal = {arXiv preprint},
+  volume  = {arXiv:2601.18418},
+  year    = {2026},
+  publisher = {arXiv},
+}
+
+@article{feng2026longclibench,
+  title={LongCLI-Bench: A Preliminary Benchmark and Study for Long-horizon Agentic Programming in Command-Line Interfaces},
+  author={Yukang Feng and
+                  Jianwen Sun and
+                  Zelai Yang and
+                  Jiaxin Ai and
+                  Chuanhao Li and
+                  Zizhen Li and
+                  Fanrui Zhang and
+                  Kang He and
+                  Rui Ma and
+                  Jifan Lin and
+                  Jie Sun and
+                  Yang Xiao and
+                  Sizhuo Zhou and
+                  Wenxiao Wu and
+                  Yiming Liu and
+                  Pengfei Liu and
+                  Yu Qiao and
+                  Shenglin Zhang and
+                  Kaipeng Zhang},
+  journal = {arXiv preprint},
+  volume  = {arXiv:2602.14337},
+  year    = {2026},
+  publisher = {arXiv},
+}
+
+@article{fu2026davincienv,
+  title={daVinci-Env: Open SWE Environment Synthesis at Scale},
+  author={Dayuan Fu and
+                  Shenyu Wu and
+                  Yunze Wu and
+                  Zerui Peng and
+                  Yaxing Huang and
+                  Jie Sun and
+                  Ji Zeng and
+                  Mohan Jiang and
+                  Lin Zhang and
+                  Yukun Li and
+                  Jiarui Hu and
+                  Liming Liu and
+                  Jinlong Hou and
+                  Pengfei Liu},
+  journal = {arXiv preprint},
+  volume  = {arXiv:2603.13023},
+  year    = {2026},
+  publisher = {arXiv},
+}
+
+@article{fu2026argo,
+  title={ARGO: Asynchronous Rollout with Human Guidance for Research Agent Optimization},
+  author={Dayuan Fu and Yunze Wu and Xiaojie Cai and Lyumanshan Ye and Shijie Xia and Zhen Huang and Weiye Si and Tianze Xu and Jie Sun and Keyu Li and Mohan Jiang and Junfei Wang and Qishuo Hua and Pengrui Lu and Xiangkun Hu and Yang Xiao and Pengfei Liu},
+  journal={OpenReview preprint},
+  year={2026}
+}
+
+@article{sun2026sepseq,
+  title={SepSeq: A Training-Free Framework for Long Numerical Sequence Processing in LLMs},
+  author={Jie Sun and
+                  Yu Liu and
+                  Lu Han and
+                  Qiwen Deng and
+                  Xiang Shu and
+                  Yang Xiao and
+                  Xingyu Lu and
+                  Jun Zhou and
+                  Pengfei Liu and
+                  Lintao Ma and
+                  Jiancan Wu and
+                  Xiang Wang},
+  journal = {arXiv preprint},
+  volume  = {arXiv:2604.07737},
+  year    = {2026},
+  publisher = {arXiv}
+}
+
+@inproceedings{sun2025lampval,
+  title={LaMP-Val: Large Language Models Empower Personalized Valuation in Auction},
+  author={Jie Sun and
+                  Tianyu Zhang and
+                  Houcheng Jiang and
+                  Kexin Huang and
+                  Xiang Shu and
+                  Zhibo Zhu and
+                  Lintao Ma and
+                  Xingyu Lu and
+                  Jun Zhou and
+                  Junkang Wu and
+                  Chi Luo and
+                  An Zhang and
+                  Jiancan Wu and
+                  Xiang Wang},
+  booktitle={Findings of the Association for Computational Linguistics: EMNLP 2025},
+  pages={579--595},
+  year={2025}
+}
+
+@article{sui2025simple,
+  title={A Simple Data Augmentation for Graph Classification: A Perspective of Equivariance and Invariance},
+  author={Yongduo Sui and
+                  Shuyao Wang and
+                  Jie Sun and
+                  Zhiyuan Liu and
+                  Qing Cui and
+                  Longfei Li and
+                  Jun Zhou and
+                  Xiang Wang and
+                  Xiangnan He},
+  journal={ACM Transactions on Knowledge Discovery from Data},
+  volume={19},
+  number={2},
+  pages={1--24},
+  year={2025}
+}
+
+@inproceedings{sui2025unified,
+  title={A Unified Invariant Learning Framework for Graph Classification},
+  author={Yongduo Sui and
+                  Jie Sun and
+                  Shuyao Wang and
+                  Zemin Liu and
+                  Qing Cui and
+                  Longfei Li and
+                  Xiang Wang},
+  booktitle={Proceedings of the 31st ACM SIGKDD Conference on Knowledge Discovery and Data Mining},
+  year={2025}
+}
+
+@article{li2026unifying,
+  title={Unifying Group-Relative and Self-Distillation Policy Optimization
+                  via Sample Routing},
+  author={Gengsheng Li and
+                  Tianyu Yang and
+                  Junfeng Fang and
+                  Mingyang Song and
+                  Mao Zheng and
+                  Haiyun Guo and
+                  Dan Zhang and
+                  Jinqiao Wang and
+                  Tat{-}Seng Chua},
+  journal = {arXiv preprint},
+  volume  = {arXiv:2604.02288},
+  year    = {2026},
+  publisher = {arXiv}
+}
+
+@article{fu2026Revisiting,
+  title={Revisiting On-Policy Distillation: Empirical Failure Modes and Simple Fixes},
+  author={Yuqian Fu and
+                  Haohuan Huang and
+                  Kaiwen Jiang and
+                  Yuanheng Zhu and
+                  Dongbin Zhao},
+  journal = {arXiv preprint},
+  volume  = {arXiv:2603.25562},
+  year    = {2026},
+  publisher = {arXiv}
+}
+
+@article{sun2026simctrecoveringlostsupervision,
+      title={SimCT: Recovering Lost Supervision for Cross-Tokenizer On-Policy Distillation}, 
+      author={Jie Sun and Mao Zheng and Mingyang Song and Qiyong Zhong and Yilin Cheng and Bichuan Feng and Pengfei Liu and Junfeng Fang and Xiang Wang},
+      year={2026},
+      eprint={2605.07711},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2605.07711}, 
+}
+
+
+@software{vonwerra2020trl,
+  title   = {{TRL}: Transformers Reinforcement Learning},
+  author  = {von Werra, Leandro and Belkada, Younes and Tunstall, Lewis and Beeching, Edward and Thrush, Tristan and Lambert, Nathan and Huang, Shengyi and Rasul, Kashif and Gallouédec, Quentin},
+  license = {Apache-2.0},
+  url     = {https://github.com/huggingface/trl},
+  year    = {2020}
+}
+
+@article{sheng2024hybridflow_verl,
+  title   = {HybridFlow: A Flexible and Efficient RLHF Framework},
+  author  = {Guangming Sheng and Chi Zhang and Zilingfeng Ye and Xibin Wu and Wang Zhang and Ru Zhang and Yanghua Peng and Haibin Lin and Chuan Wu},
+  year    = {2024},
+  journal = {arXiv preprint arXiv: 2409.19256}
+}
+
+@misc{slime_github,
+  author       = {Zilin Zhu and Chengxing Xie and Xin Lv and slime Contributors},
+  title        = {slime: An LLM post-training framework for RL Scaling},
+  year         = {2025},
+  howpublished = {\url{https://github.com/THUDM/slime}},
+  note         = {GitHub repository. Corresponding author: Xin Lv},
+  urldate      = {2025-06-19}
+}
+
+
+@inproceedings{kim2016sequence,
+  title     = {Sequence-Level Knowledge Distillation},
+  author    = {Kim, Yoon and Rush, Alexander M.},
+  editor    = {Su, Jian and Duh, Kevin and Carreras, Xavier},
+  booktitle = {Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing},
+  year      = {2016},
+  address   = {Austin, Texas},
+  publisher = {Association for Computational Linguistics},
+  pages     = {1317--1327},
+  doi       = {10.18653/v1/D16-1139},
+  url       = {https://aclanthology.org/D16-1139/}
+}
+
+
+@article{zhao2026selfdistilled,
+  author  = {Siyan Zhao and
+             Zhihui Xie and
+             Mengchen Liu and
+             Jing Huang and
+             Guan Pang and
+             Feiyu Chen and
+             Aditya Grover},
+  title   = {Self-Distilled Reasoner:
+             On-Policy Self-Distillation for Large Language Models},
+  journal = {arXiv preprint},
+  volume  = {arXiv:2601.18734},
+  year    = {2026},
+  publisher = {arXiv}
+}
+
+% SDPO
+@article{hubotter2026sdpo,
+  author        = {Jonas H{\"u}botter and Frederike L{\"u}beck and
+                   Lejs Behric and Anton Baumann and Marco Bagatella and
+                   Daniel Marta and Ido Hakimi and Idan Shenfeld and
+                   Thomas Kleine Buening and Carlos Guestrin and
+                   Andreas Krause},
+  title         = {Reinforcement Learning via Self-Distillation},
+  journal       = {arXiv preprint},
+  volume        = {arXiv:2601.20802},
+  year          = {2026},
+  eprint        = {2601.20802},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG}
+}
+
+% SciKnowEval
+@article{feng2024sciknoweval,
+  author        = {Kehua Feng and Keyan Ding and Weijie Wang and
+                   Xiang Zhuang and Zeyuan Wang and Ming Qin and
+                   Yu Zhao and Jianhua Yao and Qiang Zhang and
+                   Huajun Chen},
+  title         = {{SciKnowEval}: Evaluating Multi-level Scientific
+                   Knowledge of Large Language Models},
+  journal       = {arXiv preprint},
+  volume        = {arXiv:2406.09098},
+  year          = {2024},
+  eprint        = {2406.09098},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CL}
+}
+
+% ToolAlpaca
+@article{tang2023toolalpaca,
+  author        = {Qiaoyu Tang and Ziliang Deng and Hongyu Lin and
+                   Xianpei Han and Qiao Liang and Boxi Cao and Le Sun},
+  title         = {{ToolAlpaca}: Generalized Tool Learning for Language
+                   Models with 3000 Simulated Cases},
+  journal       = {arXiv preprint},
+  volume        = {arXiv:2306.05301},
+  year          = {2023},
+  eprint        = {2306.05301},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CL}
+}
+
+% Qwen3
+@article{qwen2025qwen3,
+  author        = {{Qwen Team}},
+  title         = {{Qwen3} Technical Report},
+  journal       = {arXiv preprint},
+  volume        = {arXiv:2505.09388},
+  year          = {2025},
+  eprint        = {2505.09388},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CL}
+}
+
+% DeepSeekMath, which introduces GRPO
+@article{shao2024deepseekmath,
+  author        = {Zhihong Shao and Peiyi Wang and Qihao Zhu and
+                   Runxin Xu and Junxiao Song and Xiao Bi and
+                   Haowei Zhang and Mingchuan Zhang and Y. K. Li and
+                   Y. Wu and Daya Guo},
+  title         = {{DeepSeekMath}: Pushing the Limits of Mathematical
+                   Reasoning in Open Language Models},
+  journal       = {arXiv preprint},
+  volume        = {arXiv:2402.03300},
+  year          = {2024},
+  eprint        = {2402.03300},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CL}
+}
+
+% Official source for the AIME competition
+@misc{maa_aime,
+  author       = {{Mathematical Association of America}},
+  title        = {{MAA} Invitational Competitions: American Invitational
+                  Mathematics Examination ({AIME})},
+  howpublished = {\url{https://maa.org/maa-invitational-competitions/}},
+  note         = {Accessed: 2026-07-01}
+}

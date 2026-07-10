@@ -3,8 +3,8 @@
   "model_path": "/root/workspace/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini/hf/global_step_154",
   "results": {
     "gsm8k": {
-      "accuracy": 87.26307808946171,
-      "correct": 1151,
+      "accuracy": 89.61334344200151,
+      "correct": 1182,
       "total": 1319
     }
   }

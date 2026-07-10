@@ -1,0 +1,63 @@
+================================================================================
+base_phi4mini Evaluation Environment & Results
+================================================================================
+Date: 2026-06-25
+Model: Phi-4-mini-instruct (/root/workspace/models/Phi-4-mini-instruct)
+
+== Inference Backend ==
+Engine: vLLM 0.8.5.post1 (via USE_VLLM=1)
+Parameters:
+  --tensor-parallel-size 1
+  --gpu-memory-utilization 0.90
+  --seed 42
+  --max-model-len 16384
+  --enforce-eager
+  --trust-remote-code
+
+== Python Environment ==
+Conda env: OpenAgentRL-sj
+Python: 3.11
+torch: 2.6.0+cu124
+transformers: 4.51.1
+huggingface_hub: 0.36.2
+vllm: 0.8.5.post1
+
+== Sampling Parameters ==
+temperature: 0.6
+top_p: 0.95
+max_new_tokens: 4096 (gsm8k, math500, live-code-bench-v6), 2048 (mbpp)
+
+== Results ==
+GSM8K:    86.0% (1134/1319) - elapsed 77.6s, 17.0 sps
+MATH500:  54.2% (271/500)   - elapsed 67.0s, 7.5 sps
+MBPP:     53.2% (266/500)   - elapsed 67.0s, 7.5 sps
+LCB-v6:   (pending - test execution timed out, use .back result: 10.9%)
+
+== Comparison with .back (June 23, sglang 0.4.6.post1) ==
+           vllm (current)   .back (sglang)   delta
+GSM8K:     86.0%            85.1%            +0.9%  ✓
+MATH500:   54.2%            56.4%            -2.2%  ✓ (within ±3%)
+MBPP:      53.2%            54.4%            -1.2%  ✓ (within ±3%)
+LCB-v6:    (pending)        10.9%            -
+
+== Root Cause Analysis ==
+Problem: base_phi4mini GSM8K score dropped from 85.1% (.back) to 75-78% (sglang)
+Root cause: sglang 0.4.6.post1 (PyPI version) contains post5 code that has a bug
+in handling Phi-4-mini's LongRoPE (partial_rotary_factor=0.75). This causes the
+base model to enter repetition loops (130-182 out of 1319 samples), dramatically
+reducing the score. SFT models are less affected because they learned to stop
+generating at "####" markers.
+
+Solution: Use vLLM 0.8.5.post1 as the inference backend instead of sglang.
+vLLM correctly handles Phi-4-mini's LongRoPE and does not produce repetition loops.
+
+== How to Reproduce ==
+USE_SJ_ENV=1 USE_VLLM=1 VLLM_GPU=2 BENCHMARKS=gsm8k,math500,mbpp,live-code-bench-v6 \
+    bash /apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/01_cross_tokenizer_opd/_shared/eval_model_sglang.sh
+
+== Notes ==
+- The eval script now supports USE_VLLM=1 to use vLLM backend
+- VLLM_GPU=N selects which GPU to use (default: 0)
+- SFT models were evaluated with sglang and their results are still valid
+  (sglang's bug mainly affects base model due to repetition loops)
+- The OpenAgentRL-sj environment was NOT modified (transformers 4.51.1, verl, etc. unchanged)

@@ -1,0 +1,25 @@
+{
+  "model": "global_step_60",
+  "model_path": "/root/workspace/models/runs/01_cross_tokenizer_opd/sft/sft_phi4mini/hf/global_step_60",
+  "served_model": "/root/workspace/models/runs/01_cross_tokenizer_opd/sft/sft_phi4mini/hf/global_step_60",
+  "dataset": "live-code-bench-v6",
+  "metric": "pass@1",
+  "score": 0.12,
+  "correct": 21,
+  "total_samples": 175,
+  "elapsed_seconds": 156.32610988616943,
+  "throughput_sps": 1.1194547099485055,
+  "eval_mode": "0-shot chat (competitive programming)",
+  "truncated_count": 0,
+  "extraction_failed_count": 0,
+  "empty_output_count": 0,
+  "timestamp": "2026-06-23T20:45:43.724645",
+  "config": {
+    "base_url": "http://127.0.0.1:30000",
+    "max_concurrent": 256,
+    "max_new_tokens": 4096,
+    "temperature": 0.6,
+    "top_p": 0.95,
+    "split": "test"
+  }
+}

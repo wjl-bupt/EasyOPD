@@ -1,0 +1,120 @@
+\begin{table*}[t]
+\centering
+\small
+\setlength{\tabcolsep}{6pt}
+\begin{tabular}{l cccc ccc}
+\toprule
+ & \multicolumn{4}{c}{\textbf{OPD supervision-interface coverage}}
+ & \multicolumn{3}{c}{\textbf{Framework properties}} \\
+\cmidrule(lr){2-5}\cmidrule(lr){6-8}
+
+\textbf{Framework}
+ & \shortstack{Logit\\OPD}
+ & \shortstack{Cross-tok.\\OPD}
+ & \shortstack{On-policy\\self-distill.}
+ & \shortstack{Step-wise\\OPD}
+ & \shortstack{Released\\YAML/CLI}
+ & \shortstack{Documented method\\extension API}
+ & \shortstack{Compatible w/\\multi-node} \\
+\midrule
+
+TRL
+ & \cmark
+ & \pmark$^{a}$
+ & \pmark$^{b}$
+ & \xmark
+ & \cmark
+ & \xmark$^{c}$
+ & \pmark$^{d}$ \\
+
+verl
+ & \cmark
+ & \xmark
+ & \xmark
+ & \pmark$^{e}$
+ & \cmark
+ & \xmark$^{f}$
+ & \cmark \\
+
+slime
+ & \cmark$^{g}$
+ & \xmark
+ & \pmark$^{h}$
+ & \pmark$^{e,g}$
+ & \cmark
+ & \xmark$^{f}$
+ & \cmark \\
+
+KDFlow
+ & \cmark
+ & \cmark
+ & \cmark$^{i}$
+ & \xmark
+ & \cmark
+ & \pmark$^{j}$
+ & \pmark$^{k}$ \\
+
+\textbf{Ours}
+ & \cmark
+ & \cmark
+ & \cmark
+ & \cmark
+ & \cmark
+ & \cmark
+ & \cmark \\
+\bottomrule
+\end{tabular}
+
+\caption{
+Framework-specific evidence supporting the ratings in
+Table~\ref{tab:opd-frameworks}. Ratings reflect publicly documented
+functionality of the following versions:
+EasyOPD builds on verl 0.5.0.dev; \todo{TRL, slime (commit), and KDFlow
+versions to be confirmed}.
+Where a capability could not be verified from public documentation or
+code, it is marked as not documented rather than inferred as absent.
+}
+\label{tab:opd-frameworks-detailed}
+
+\vspace{2pt}
+\begin{minipage}{0.99\textwidth}
+\footnotesize
+\raggedright
+
+$^{a}$ Cross-tokenizer support is provided through experimental
+distillation components rather than the standard GKD path.
+
+$^{b}$ TRL provides an experimental SDPO trainer with live, base, and
+EMA teacher options, but the support is tied to a specialized trainer.
+
+$^{c}$ OPD variants are implemented as separate trainer classes rather
+than composable method-level extension points.
+
+$^{d}$ Multi-node trainer execution is available, but a disaggregated
+asynchronous rollout--teacher--trainer pipeline is not provided.
+
+$^{e}$ Agentic or step-wise supervision is expressible through general
+reward/RLVR and multi-turn infrastructure, but is not exposed as a
+dedicated OPD interface.
+
+$^{f}$ New variants require method-specific logic across internal
+rollout, reward/advantage, logit-processing, or loss components.
+
+$^{g}$ slime provides OPD through its RL reward/advantage pipeline and
+offers strong agentic and multi-turn rollout infrastructure.
+
+$^{h}$ A released slime example uses the original model as the teacher
+for self-distillation, but does not expose a general live or EMA
+self-teacher interface.
+
+$^{i}$ KDFlow supports student-to-teacher weight synchronization and
+EMA teacher updates for on-policy self-distillation.
+
+$^{j}$ KDFlow provides decoupled algorithm APIs, but they remain tied
+to its own distillation stack.
+
+$^{k}$ KDFlow supports distributed execution, while its documented
+on-policy training loop is primarily synchronous.
+
+\end{minipage}
+\end{table*}

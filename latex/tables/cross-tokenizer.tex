@@ -1,0 +1,58 @@
+\begin{table}[t]
+    \centering
+    \small
+    \setlength{\tabcolsep}{4pt}
+    \renewcommand{\arraystretch}{1.15}
+    \caption{Cross-tokenizer OPD results on mathematical reasoning and code generation benchmarks. Reasoning results are exact-match accuracies, code results are pass@1 scores, and Avg.\ is their unweighted mean. The highest observed score in each column is shown in bold.}
+    \label{tab:cross_tokenizer_results}
+    \begin{tabular}{lccccc}
+        \toprule
+        Method
+        & MATH500
+        & GSM8K
+        & MBPP
+        & LCB-v6
+        & Avg. \\
+        
+        \midrule
+        
+        Base
+        & 54.2
+        & 86.0
+        & 53.2
+        & 7.4
+        & 50.2 \\
+
+        \midrule
+        
+        ULD
+        & 57.0
+        & 85.1
+        & 55.4
+        & 9.1
+        & 51.7 \\
+
+        ALM
+        & 58.2
+        & 84.9
+        & \textbf{56.4}
+        & \textbf{12.0}
+        & 52.9 \\
+
+        DSKD
+        & 58.8
+        & 86.4
+        & 56.2
+        & 9.7
+        & 52.8 \\
+
+        SimCT
+        & \textbf{59.6}
+        & \textbf{86.7}
+        & \textbf{56.4}
+        & 11.4
+        & \textbf{53.5} \\
+        
+        \bottomrule
+    \end{tabular}
+\end{table}

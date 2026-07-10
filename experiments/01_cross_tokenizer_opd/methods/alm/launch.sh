@@ -61,9 +61,9 @@ mkdir -p "${RESULTS_DIR}"
 # Student = SFT-warmed phi4-mini-instruct (1 epoch, mid-epoch ckpt at step 78).
 # After flattening (see sft/launch.sh fix), the SFT exporter writes two parallel
 # HF dirs:
-#   .../hf/global_step_78/   <- mid-epoch ckpt (this one, used as RL start)
+#   .../hf/global_step_116/  <- mid-epoch ckpt (this one, used as RL start)
 #   .../hf/global_step_156/  <- final ckpt
-STUDENT_MODEL="/root/workspace/models/runs/01_cross_tokenizer_opd/sft/sft_phi4mini/hf"
+STUDENT_MODEL="/root/workspace/models/runs/01_cross_tokenizer_opd/sft/sft_phi4mini/hf/global_step_116"
 # Teacher = original Qwen2.5-7B-Instruct on local disk.
 TEACHER_MODEL="/root/workspace/models/Qwen2.5-7B-Instruct"
 
@@ -136,8 +136,8 @@ SPEED_TIER="${SPEED_TIER:-aggressive}"
 
 if [ "${SPEED_TIER}" = "safe" ]; then
     ENABLE_GRAD_CKPT=True
-    ROLLOUT_MEM_DEFAULT=0.55
-    TEACHER_MEM_DEFAULT=0.55
+    ROLLOUT_MEM_DEFAULT=0.35
+    TEACHER_MEM_DEFAULT=0.35
     FSDP_PARAM_OFFLOAD=True
     FSDP_OPTIMIZER_OFFLOAD=True
 elif [ "${SPEED_TIER}" = "fast" ]; then
@@ -536,7 +536,7 @@ for CKPT_DIR in "${ALL_CKPTS[@]}"; do
         echo "[$(date)] [${STEP_NAME}] No actor/ subdir, skipping."
         continue
     fi
-    if [ -f "${TARGET_DIR}/model.safetensors" ] || [ -f "${TARGET_DIR}/pytorch_model.bin" ]; then
+    if [ -f "${TARGET_DIR}/model.safetensors" ] || [ -f "${TARGET_DIR}/model.safetensors.index.json" ] || [ -f "${TARGET_DIR}/pytorch_model.bin" ]; then
         echo "[$(date)] [${STEP_NAME}] Already merged at ${TARGET_DIR}, skipping."
         continue
     fi
@@ -551,52 +551,124 @@ done
 echo "[$(date)] ===== Step 4: Merge Completed ====="
 
 # ============================================================
-# Step 5: Evaluate every merged checkpoint
+# Step 5: Evaluate all benchmarks (math500, gsm8k, mbpp, live-code-bench-v6)
+# Uses evaluate_model_sglang.py with vLLM server (OpenAI API)
+# One server per checkpoint, all 4 benchmarks evaluated before shutdown
 # ============================================================
-echo "[$(date)] ===== Step 5: Evaluating ALM checkpoint(s) ====="
+echo "[$(date)] ===== Step 5: Evaluating ALM checkpoint(s) on all benchmarks ====="
 
-eval_already_done() {
-    local details_json="$1"
-    [ -f "${details_json}" ] || return 1
-    local total
-    total=$(${PYTHON} -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('total',0))" "${details_json}" 2>/dev/null || echo 0)
-    [ "${total}" -gt 0 ]
+EVAL_SGLANG_SCRIPT="${SHARED_SCRIPTS}/evaluate_model_sglang.py"
+EVAL_PORT=30000
+EVAL_BASE_URL="http://127.0.0.1:${EVAL_PORT}"
+EVAL_TEMPERATURE=0.6
+EVAL_TOP_P=0.95
+EVAL_MAX_CONCURRENT=256
+EVAL_DATA_DIR="${EXPERIMENT_DIR}/_shared/eval_data"
+
+declare -A BENCH_TOKENS
+BENCH_TOKENS[math500]=4096
+BENCH_TOKENS[gsm8k]=4096
+BENCH_TOKENS[mbpp]=2048
+BENCH_TOKENS[live-code-bench-v6]=4096
+
+ALL_BENCHMARKS=("math500" "gsm8k" "mbpp" "live-code-bench-v6")
+
+eval_kill_server() {
+    local pids=$(ps aux | grep -E "[v]llm.entrypoints.openai" | grep "\-\-port ${EVAL_PORT}" | awk '{print $2}' || true)
+    [ -n "$pids" ] && { echo "$pids" | xargs kill -9 2>/dev/null; sleep 3; } || true
+    pids=$(ps aux | grep -E "multiprocessing\.(spawn|resource_tracker)" | grep -v grep | awk '{print $2}' || true)
+    [ -n "$pids" ] && { echo "$pids" | xargs kill -9 2>/dev/null; sleep 1; } || true
+    return 0
 }
 
-run_eval_one() {
-    # $1 = MERGED_DIR, $2 = TAG, $3 = BENCH, $4 = STEP_NAME
-    local merged_dir="$1" tag="$2" bench="$3" step_name="$4"
-    local details_json="${RESULTS_DIR}/${tag}_${bench}_details.json"
+eval_start_server() {
+    local model_path="$1" gpu_id="$2"
+    echo "[$(date)] Starting vLLM server on GPU ${gpu_id}: $(basename ${model_path})"
 
-    if [ "${FORCE_REEVAL:-0}" != "1" ] && eval_already_done "${details_json}"; then
-        echo "[$(date)] [${step_name}] ${bench}: existing valid result at ${details_json}, skipping."
-        return 0
-    fi
+    CUDA_VISIBLE_DEVICES=${gpu_id} ${PYTHON} -m vllm.entrypoints.openai.api_server \
+        --model "${model_path}" --port ${EVAL_PORT} --trust-remote-code \
+        --gpu-memory-utilization 0.85 --max-model-len 16384 \
+        --disable-log-requests --enforce-eager --seed 42 \
+        > /tmp/vllm_eval_${METHOD}.log 2>&1 &
+    local spid=$!
 
-    echo "[$(date)] [${step_name}] Evaluating ${bench} on ${merged_dir} as ${tag}"
-    ${PYTHON} ${SHARED_SCRIPTS}/evaluate_model.py \
-        --model_path "${merged_dir}" \
-        --model_name "${tag}" \
-        --output_dir "${RESULTS_DIR}" \
-        --tensor_parallel_size 1 \
-        --dp_size ${N_GPUS} \
-        --benchmarks "${bench}" \
-        2>&1 | tee "${LOG_DIR}/eval_${step_name}_${bench}.log"
+    for i in $(seq 1 60); do
+        sleep 5
+        if ! kill -0 $spid 2>/dev/null; then
+            echo "[$(date)]   Server died!"; tail -10 /tmp/vllm_eval_${METHOD}.log; return 1
+        fi
+        if curl -s http://127.0.0.1:${EVAL_PORT}/v1/models 2>/dev/null | grep -q "data"; then
+            echo "[$(date)]   Server ready!"; return 0
+        fi
+    done
+    echo "[$(date)]   Timeout!"; return 1
 }
+
+eval_kill_server
+EVAL_GPU_ID=0
 
 for CKPT_DIR in "${ALL_CKPTS[@]}"; do
     STEP_NAME=$(basename "${CKPT_DIR}")
     MERGED_DIR="${HF_CKPT_DIR}/${STEP_NAME}"
     TAG="${RUN_NAME}_${STEP_NAME}"
 
-    if [ ! -d "${MERGED_DIR}" ] || [ ! -f "${MERGED_DIR}/model.safetensors" ]; then
+    if [ ! -d "${MERGED_DIR}" ] || { [ ! -f "${MERGED_DIR}/model.safetensors" ] && [ ! -f "${MERGED_DIR}/model.safetensors.index.json" ]; }; then
         echo "[$(date)] [${STEP_NAME}] Merged dir not ready, skip eval."
         continue
     fi
 
-    run_eval_one "${MERGED_DIR}" "${TAG}" "math500" "${STEP_NAME}"
-    run_eval_one "${MERGED_DIR}" "${TAG}" "gsm8k"   "${STEP_NAME}"
+    # Check if all benchmarks already done
+    all_done=true
+    for bench in "${ALL_BENCHMARKS[@]}"; do
+        [ ! -f "${RESULTS_DIR}/${TAG}_${bench}_details.json" ] && { all_done=false; break; }
+    done
+    if [ "${FORCE_REEVAL:-0}" != "1" ] && [ "${all_done}" = true ]; then
+        echo "[$(date)] [${STEP_NAME}] All benchmarks done, skip."
+        continue
+    fi
+
+    # Start vLLM server for this checkpoint
+    if ! eval_start_server "${MERGED_DIR}" "${EVAL_GPU_ID}"; then
+        echo "[$(date)] [${STEP_NAME}] First attempt failed, retrying..."
+        eval_kill_server; sleep 5
+        eval_start_server "${MERGED_DIR}" "${EVAL_GPU_ID}" || {
+            echo "[$(date)] [${STEP_NAME}] FAILED to start server, skip eval."
+            eval_kill_server; continue
+        }
+    fi
+
+    # Evaluate all 4 benchmarks with the same server
+    for bench in "${ALL_BENCHMARKS[@]}"; do
+        local_output_dir="${RESULTS_DIR}/${TAG}_${bench}"
+        details_json="${RESULTS_DIR}/${TAG}_${bench}_details.json"
+
+        if [ "${FORCE_REEVAL:-0}" != "1" ] && [ -f "${details_json}" ]; then
+            echo "[$(date)] [${STEP_NAME}] ${bench}: already done, skip."
+            continue
+        fi
+
+        mkdir -p "${local_output_dir}"
+        echo "[$(date)] [${STEP_NAME}] Evaluating ${bench}..."
+        ${PYTHON} ${EVAL_SGLANG_SCRIPT} --model_path "${MERGED_DIR}" --dataset "${bench}" \
+            --base_url "${EVAL_BASE_URL}" --output_dir "${local_output_dir}" \
+            --data_dir "${EVAL_DATA_DIR}" \
+            --max_new_tokens ${BENCH_TOKENS[$bench]} --max_concurrent ${EVAL_MAX_CONCURRENT} \
+            --temperature ${EVAL_TEMPERATURE} --top_p ${EVAL_TOP_P} \
+            2>&1 | tee "${LOG_DIR}/eval_${STEP_NAME}_${bench}.log" | tail -5
+        if [ $? -eq 0 ]; then
+            echo "[$(date)] [${STEP_NAME}] ${bench}: Done"
+            [ -f "${local_output_dir}/metrics.json" ] && cp "${local_output_dir}/metrics.json" "${details_json}"
+        else
+            echo "[$(date)] [${STEP_NAME}] ${bench}: Failed"
+        fi
+    done
+
+    echo "[$(date)] [${STEP_NAME}] Shutting down vLLM server..."
+    eval_kill_server; sleep 5
+    EVAL_GPU_ID=$(( (EVAL_GPU_ID + 1) % ${N_GPUS} ))
 done
+
+echo "[$(date)] ===== Step 5: Evaluation Completed ====="
 
 echo "[$(date)] ===== All Done ====="
 echo "All artifacts under: ${RUN_DIR}"

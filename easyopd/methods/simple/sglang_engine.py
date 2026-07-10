@@ -71,9 +71,7 @@ class EngineConfig:
     pp_size: int = 1
     chunked_prefill_size: int = -1
     disable_radix_cache: bool = True
-    enable_return_hidden_states: bool = True
-    enable_memory_saver: bool = True
-    enable_weights_cpu_backup: bool = True
+    enable_memory_saver: bool = False
     mem_fraction_static: float = 0.8
     context_length: Optional[int] = None
     quantization: Optional[str] = None
@@ -88,10 +86,21 @@ class EngineConfig:
 def _engine_worker(
     config: EngineConfig, request_queue: Queue, response_queue: Queue
 ) -> None:
+    import asyncio
+
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     os.environ["SGLANG_DISABLE_CUDNN_CHECK"] = "1"
     if config.nnodes > 1:
         os.environ["SGLANG_BLOCK_NONZERO_RANK_CHILDREN"] = "0"
+
+    # Ensure an asyncio event loop exists in this spawned subprocess.
+    # SGLang 0.4.6.post3 uses asyncio.get_event_loop() internally for
+    # release_memory_occupation / resume_memory_occupation / generate etc.
+    # uvloop (if installed) raises RuntimeError if no loop is set.
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
 
     engine = None
     zmq_ctx = None
@@ -106,12 +115,8 @@ def _engine_worker(
             model_path=config.model_path,
             tp_size=config.tp_size,
             ep_size=config.ep_size,
-            pp_size=config.pp_size,
             chunked_prefill_size=config.chunked_prefill_size,
             disable_radix_cache=config.disable_radix_cache,
-            enable_return_hidden_states=config.enable_return_hidden_states,
-            enable_memory_saver=config.enable_memory_saver,
-            enable_weights_cpu_backup=config.enable_weights_cpu_backup,
             quantization=config.quantization,
             mem_fraction_static=config.mem_fraction_static,
             base_gpu_id=config.base_gpu_id,
@@ -233,6 +238,8 @@ def _handle_generate(engine, request, data_socket, request_queue, response_queue
 
     for i, (output, mask) in enumerate(zip(outputs, kwargs["loss_masks"])):
         hs_np = output["meta_info"]["hidden_states"][0]
+        hs_np = np.asarray(hs_np)
+        mask = np.asarray(mask).astype(bool)
         hs_np = hs_np[: mask.shape[0]]  # loss_mask may have been truncated
         hs_np = hs_np[mask]
         if not hs_np.flags["C_CONTIGUOUS"]:
@@ -245,17 +252,31 @@ def _handle_generate(engine, request, data_socket, request_queue, response_queue
 
 def _handle_sleep(engine, request, config, response_queue):
     """Offload GPU memory."""
+    import asyncio
     tags = request.get("tags", config.offload_tags)
     torch.cuda.empty_cache()
-    engine.release_memory_occupation(tags=_normalize_tags(tags))
+    # SGLang 0.4.6.post3 uses asyncio.get_event_loop() internally;
+    # in a spawned subprocess there may be no current loop.
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+    engine.release_memory_occupation()
     response_queue.put({"type": "sleep", "success": True, "tags": tags})
 
 
 def _handle_wakeup(engine, request, config, response_queue):
     """Restore GPU memory."""
+    import asyncio
     tags = request.get("tags", config.offload_tags)
     torch.cuda.empty_cache()
-    engine.resume_memory_occupation(tags=_normalize_tags(tags))
+    # SGLang 0.4.6.post3 uses asyncio.get_event_loop() internally;
+    # in a spawned subprocess there may be no current loop.
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+    engine.resume_memory_occupation()
     response_queue.put({"type": "wakeup", "success": True, "tags": tags})
 
 

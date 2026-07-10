@@ -394,9 +394,9 @@ class EasyOPDSimpleTeacherSidecar:
         # as the response start, clamped to len(full_ids).
         if max_length is not None:
             # SGLang rejects inputs with len(input_ids) >= context_len because
-            # it internally reserves one token. Keep at least one slot below
-            # the configured context length.
-            safe_max_length = max(int(max_length) - 1, 0)
+            # it internally reserves several tokens (typically 6). Keep a
+            # comfortable margin below the configured context length.
+            safe_max_length = max(int(max_length) - 16, 0)
             if len(full_ids) > safe_max_length:
                 original_len = len(full_ids)
                 full_ids = full_ids[:safe_max_length]

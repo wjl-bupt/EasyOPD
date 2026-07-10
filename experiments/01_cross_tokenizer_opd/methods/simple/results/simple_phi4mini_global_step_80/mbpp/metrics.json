@@ -1,0 +1,25 @@
+{
+  "model": "global_step_80",
+  "model_path": "/root/workspace/models/runs/01_cross_tokenizer_opd/simple/simple_phi4mini/hf/global_step_80",
+  "served_model": "/root/workspace/models/runs/01_cross_tokenizer_opd/simple/simple_phi4mini/hf/global_step_80",
+  "dataset": "mbpp",
+  "metric": "pass@1",
+  "score": 0.554,
+  "correct": 277,
+  "total_samples": 500,
+  "elapsed_seconds": 57.61796474456787,
+  "throughput_sps": 8.677849039212013,
+  "eval_mode": "0-shot chat with test cases (code generation)",
+  "truncated_count": 0,
+  "extraction_failed_count": 0,
+  "empty_output_count": 0,
+  "timestamp": "2026-06-26T16:32:04.476150",
+  "config": {
+    "base_url": "http://127.0.0.1:30000",
+    "max_concurrent": 256,
+    "max_new_tokens": 2048,
+    "temperature": 0.6,
+    "top_p": 0.95,
+    "split": "test"
+  }
+}

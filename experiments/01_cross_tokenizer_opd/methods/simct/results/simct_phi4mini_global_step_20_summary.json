@@ -1,0 +1,11 @@
+{
+  "model_name": "simct_phi4mini_global_step_20",
+  "model_path": "/root/workspace/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini/hf/global_step_20",
+  "results": {
+    "gsm8k": {
+      "accuracy": 89.91660348749052,
+      "correct": 1186,
+      "total": 1319
+    }
+  }
+}

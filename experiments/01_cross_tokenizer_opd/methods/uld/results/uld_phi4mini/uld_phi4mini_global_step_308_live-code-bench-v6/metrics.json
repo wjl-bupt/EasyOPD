@@ -1,0 +1,25 @@
+{
+  "model": "global_step_308",
+  "model_path": "/root/workspace/models/runs/01_cross_tokenizer_opd/uld/uld_phi4mini/hf/global_step_308",
+  "served_model": "/root/workspace/models/runs/01_cross_tokenizer_opd/uld/uld_phi4mini/hf/global_step_308",
+  "dataset": "live-code-bench-v6",
+  "metric": "pass@1",
+  "score": 0.07428571428571429,
+  "correct": 13,
+  "total_samples": 175,
+  "elapsed_seconds": 156.54844856262207,
+  "throughput_sps": 1.1178647990880408,
+  "eval_mode": "0-shot chat (competitive programming)",
+  "truncated_count": 0,
+  "extraction_failed_count": 0,
+  "empty_output_count": 0,
+  "timestamp": "2026-06-27T17:22:26.493516",
+  "config": {
+    "base_url": "http://127.0.0.1:30000",
+    "max_concurrent": 256,
+    "max_new_tokens": 4096,
+    "temperature": 0.6,
+    "top_p": 0.95,
+    "split": "test"
+  }
+}

@@ -1,0 +1,62 @@
+% Figure 2: EasyOPD running example (SimCT). All field names, the launch
+% command, and the diagnostic metric names are copied from the released
+% repository (easyopd/config/simct.yaml, examples/simct/run_simct.sh, and
+% easyopd/methods/simct/losses.py).
+\begin{figure*}[t]
+    \centering
+    \footnotesize
+    \setlength{\fboxsep}{4pt}
+    %---------------- Left: YAML + CLI ----------------%
+    \begin{minipage}[t]{0.31\textwidth}
+        \raggedright
+        \textbf{(a) Declarative configuration}\\[2pt]
+        \begin{lstlisting}[basicstyle=\ttfamily\tiny,frame=single,numbers=none,language=]
+# config/simct.yaml
+student_model_path: Qwen/Qwen3-8B
+teacher_model_path:
+  meta-llama/Llama-3.2-3B-Instruct
+distillation:
+  enabled: true
+  distillation_loss:
+    loss_mode: simct
+    cross_tokenizer_kl_direction:
+      reverse
+    use_task_rewards: false
+        \end{lstlisting}
+        \textbf{Launch}\\[2pt]
+        \begin{lstlisting}[basicstyle=\ttfamily\tiny,frame=single,numbers=none,language=bash]
+bash examples/simct/run_simct.sh
+        \end{lstlisting}
+    \end{minipage}
+    \hfill
+    %---------------- Middle: dispatch ----------------%
+    \begin{minipage}[t]{0.32\textwidth}
+        \raggedright
+        \textbf{(b) Resolution and hook composition}\\[6pt]
+        \fbox{\parbox{0.92\linewidth}{\centering Config}}\\[2pt]
+        \centering$\downarrow$\\[2pt]
+        \fbox{\parbox{0.92\linewidth}{\centering Registry (\texttt{loss\_mode=simct})}}\\[2pt]
+        $\downarrow$\\[2pt]
+        \fbox{\parbox{0.92\linewidth}{\centering SimCT module:\\ cross-tokenizer alignment\\ +\ teacher sidecar\ +\ loss}}\\[2pt]
+        $\downarrow$\\[2pt]
+        \fbox{\parbox{0.92\linewidth}{\centering verl: rollout + optimization}}\\[6pt]
+        \raggedright Only the hooks required by SimCT are activated; other methods activate a different subset.
+    \end{minipage}
+    \hfill
+    %---------------- Right: diagnostics ----------------%
+    \begin{minipage}[t]{0.31\textwidth}
+        \raggedright
+        \textbf{(c) Supervision diagnostics}\\[2pt]
+        \begin{lstlisting}[basicstyle=\ttfamily\tiny,frame=single,numbers=none,language=]
+distillation/overlap_vocab_size
+distillation/simct_valid_segments
+distillation/simct_span_segments
+distillation/simct_skipped_samples
+distillation/simct_valid_span_ratio
+distillation/simct_loss
+        \end{lstlisting}
+        \raggedright In addition to task performance, EasyOPD logs whether the intended cross-tokenizer supervision is active.
+    \end{minipage}
+    \caption{A running example of launching SimCT with \textsc{EasyOPD}. The YAML configuration selects the method and resolves its method-specific options; the registry activates the required alignment, teacher-side, and loss hooks; verl executes rollout generation and optimization, while \textsc{EasyOPD} reports supervision-specific diagnostics. Field names, the launch command, and the diagnostic metric names are taken from the released repository.}
+    \label{fig:running_example}
+\end{figure*}
