@@ -151,3 +151,9 @@ experiments/**/predictions.jsonl
 
 # EasyOPD.pdf (binary)
 EasyOPD.pdf
+
+# personal academic homepage (separate standalone git repo)
+academic-homepage/
+
+# SDPO (separate nested git repo, ~51MB with datasets)
+SDPO/

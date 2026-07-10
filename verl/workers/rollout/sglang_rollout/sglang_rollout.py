@@ -29,11 +29,20 @@ import numpy as np
 import sglang.srt.entrypoints.engine
 import torch
 import torch.distributed as dist
-from sglang.srt.managers.tokenizer_manager import (
-    ReleaseMemoryOccupationReqInput,
-    ResumeMemoryOccupationReqInput,
-    UpdateWeightsFromTensorReqInput,
-)
+try:
+    from sglang.srt.managers.tokenizer_manager import (
+        ReleaseMemoryOccupationReqInput,
+        ResumeMemoryOccupationReqInput,
+        UpdateWeightsFromTensorReqInput,
+    )
+except ImportError:
+    # Newer sglang releases moved these ReqInput dataclasses out of
+    # tokenizer_manager into io_struct. Fall back so verl works across versions.
+    from sglang.srt.managers.io_struct import (
+        ReleaseMemoryOccupationReqInput,
+        ResumeMemoryOccupationReqInput,
+        UpdateWeightsFromTensorReqInput,
+    )
 from sglang.srt.sampling.sampling_params import SamplingParams
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.utils import (
