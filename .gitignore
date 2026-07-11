@@ -161,6 +161,14 @@ experiments/**/*_details.json
 experiments/**/logs/
 experiments/**/predictions.jsonl
 
+# experiment eval results and run outputs (kept locally, not published)
+experiments/**/results/
+experiments/**/results.back/
+experiments/**/*.back/
+experiments/**/*.bak.*
+experiments/**/*.parquet.bak.*
+experiments/**/teacher_sft_train_config.json
+
 # EasyOPD.pdf (binary)
 EasyOPD.pdf
 
