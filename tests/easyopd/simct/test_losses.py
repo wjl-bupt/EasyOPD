@@ -137,9 +137,9 @@ def test_build_virtual_vocab_logits_span_dim_with_sum_and_masking():
     assert torch.allclose(student_virtual[0, :2], torch.tensor([1.0, 2.0]))
     assert torch.allclose(teacher_virtual[0, :2], torch.tensor([3.0, 5.0]))
 
-    # Span dim = SUM of self-logits: student 4.0+6.0=10.0, teacher 8.0+10.0=18.0
-    assert torch.allclose(student_virtual[0, 2], torch.tensor(10.0))
-    assert torch.allclose(teacher_virtual[0, 2], torch.tensor(18.0))
+    # Span dim = MEAN of self-logits: student (4.0+6.0)/2=5.0, teacher (8.0+10.0)/2=9.0
+    assert torch.allclose(student_virtual[0, 2], torch.tensor(5.0))
+    assert torch.allclose(teacher_virtual[0, 2], torch.tensor(9.0))
 
 
 def test_build_virtual_vocab_logits_first_token_masking():
@@ -176,9 +176,9 @@ def test_build_virtual_vocab_logits_first_token_masking():
     # Second overlap position is kept
     assert student_virtual[0, 1].item() == 8.0
     assert teacher_virtual[0, 1].item() == 5.0
-    # Span dim = sum: student 7.0+6.0=13.0, teacher 9.0+10.0=19.0
-    assert torch.allclose(student_virtual[0, 2], torch.tensor(13.0))
-    assert torch.allclose(teacher_virtual[0, 2], torch.tensor(19.0))
+    # Span dim = mean: student (7.0+6.0)/2=6.5, teacher (9.0+10.0)/2=9.5
+    assert torch.allclose(student_virtual[0, 2], torch.tensor(6.5))
+    assert torch.allclose(teacher_virtual[0, 2], torch.tensor(9.5))
 
 
 def test_build_virtual_vocab_logits_one_to_one_segment():

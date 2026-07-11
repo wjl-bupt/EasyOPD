@@ -5,18 +5,16 @@
 \subsection{Experimental Setup}
 \label{sec:exp_setup}
 
-We evaluate \textsc{EasyOPD} in three settings that exercise different method-specific interfaces. Cross-tokenizer OPD requires supervision across different teacher and student tokenizations. On-policy self-distillation instantiates teacher and student policies from the same model under different conditioning contexts. Step-wise OPD assigns supervision to intermediate reasoning or tool-interaction steps. Together, these settings cover variation in supervision space, teacher conditioning, and supervision granularity. The three settings are not intended as a single cross-regime leaderboard: they exercise different supervision spaces, teacher-conditioning schemes, and supervision granularities under a shared implementation structure.
+We evaluate \textsc{EasyOPD} in three settings that exercise different method-specific interfaces. Cross-tokenizer OPD requires supervision across different teacher and student tokenizations. On-policy self-distillation instantiates teacher and student policies from the same model under different conditioning contexts. Step-wise OPD assigns supervision to intermediate reasoning or tool-interaction steps. These settings cover variation in supervision space, teacher conditioning, and supervision granularity, and are not intended as a single cross-regime leaderboard.
 
 \paragraph{Cross-tokenizer OPD.}
-Standard OPD directly compares teacher and student next-token distributions, which are not naturally aligned when the two models use different tokenizers. Cross-tokenizer methods address this problem by constructing a shared supervision space. We compare SimCT \citep{sun2026simctrecoveringlostsupervision}, ULD \citep{boizard2025uld}, ALM \citep{minixhofer2025alm}, and DSKD \citep{zhang2024dskd}. We distill Qwen2.5-7B-Instruct \citep{qwen25} into Phi-4-mini-Instruct \citep{phi4mini}. All methods start from the same student checkpoint, warm-started on a shared 10K teacher-generated math and code corpus, and use the same training prompts and optimization budget. We evaluate on MATH500
-\citep{lightman2023math500}, GSM8K~\citep{cobbe2021training_gms8k}, MBPP~\citep{austin2021program_mbpp}, and LiveCodeBench v6~\citep{jain2024livecodebench}. We report exact-match accuracy for reasoning, pass@1 for code, and their unweighted mean.
+Standard OPD directly compares teacher and student next-token distributions, which are not naturally aligned under different tokenizers; cross-tokenizer methods address this by constructing a shared supervision space. We compare SimCT \citep{sun2026simctrecoveringlostsupervision}, ULD \citep{boizard2025uld}, ALM \citep{minixhofer2025alm}, and DSKD \citep{zhang2024dskd}, distilling Qwen2.5-7B-Instruct \citep{qwen25} into Phi-4-mini-Instruct \citep{phi4mini}. All methods start from the same student checkpoint, warm-started on a shared 10K teacher-generated math and code corpus, and use the same training prompts and optimization budget. We evaluate on MATH500 \citep{lightman2023math500}, GSM8K~\citep{cobbe2021training_gms8k}, MBPP~\citep{austin2021program_mbpp}, and LiveCodeBench v6~\citep{jain2024livecodebench}, reporting exact-match accuracy for reasoning, pass@1 for code, and their unweighted mean.
 
 \paragraph{On-policy self-distillation.}
 On-policy self-distillation (OPSD) uses the same base model under different conditioning contexts: the student generates a response from the original prompt, while the self-teacher re-evaluates it with additional feedback. We instantiate this setting with SDPO~\citep{hubotter2026sdpo}, using Qwen3-8B~\citep{qwen2025qwen3} as both the student and self-teacher, and compare it with the base model and GRPO~\citep{shao2024deepseekmath}. We evaluate Chemistry from SciKnowEval~\citep{feng2024sciknoweval}, Biology from SciKnowEval~\citep{feng2024sciknoweval}, Tool Use from ToolAlpaca~\citep{tang2023toolalpaca}, and mathematical reasoning on GSM8K~\citep{cobbe2021training_gms8k}. We report the highest Average@16 reached within one-hour and five-hour wall-clock budgets, where Average@16 is the mean correctness over 16 independently sampled responses per question.
 
 \paragraph{Step-wise OPD.}
-Response-level OPD~\citep{agarwal2024onpolicy_opsd} applies teacher supervision uniformly across a trajectory, although supervision on later steps may become less reliable after erroneous tool interactions. SOD~\citep{zhong2026sod} instead reweights the distillation loss according to step-level student--teacher divergence. 
-We use Qwen3-1.7B~\citep{qwen2025qwen3} as the student and a GRPO-optimized Qwen3-4B~\citep{zhong2026sod} as the teacher. We compare the base model, GRPO~\citep{shao2024deepseekmath}, response-level OPD~\citep{agarwal2024onpolicy_opsd}, and SOD~\citep{zhong2026sod}. All methods use the same SFT initialization, training data, and optimization budget \citep{zhong2026sod}. We evaluate on AIME 2024, AIME 2025~\citep{maa_aime}, and LiveCodeBench v6~\citep{jain2024livecodebench}. Each benchmark score is Average@32 over 32 independently sampled responses per problem, and Avg.\ is the unweighted mean across the three benchmarks.
+Response-level OPD~\citep{agarwal2024onpolicy_opsd} applies teacher supervision uniformly across a trajectory, although supervision on later steps may become less reliable after erroneous tool interactions. SOD~\citep{zhong2026sod} instead reweights the distillation loss by step-level student--teacher divergence. We use Qwen3-1.7B~\citep{qwen2025qwen3} as the student and a GRPO-optimized Qwen3-4B~\citep{zhong2026sod} as the teacher, comparing the base model, GRPO~\citep{shao2024deepseekmath}, response-level OPD, and SOD under a shared SFT initialization, training data, and optimization budget \citep{zhong2026sod}. We evaluate on AIME 2024, AIME 2025~\citep{maa_aime}, and LiveCodeBench v6~\citep{jain2024livecodebench}; each score is Average@32 over 32 sampled responses per problem, and Avg.\ is their unweighted mean.
 
 \paragraph{Shared implementation.}
 All methods are implemented in \textsc{EasyOPD} and executed through the same verl-based infrastructure~\citep{sheng2024hybridflow_verl}. Within each setting, we keep the model configuration, training data, execution backend, and evaluation procedure fixed where applicable, while retaining each method's original supervision design. Additional optimization, sampling, hardware, and checkpoint details are provided in the Appendix~\ref{app:exp_setup}.
@@ -40,50 +38,4 @@ Table~\ref{tab:self_opd_results} compares SDPO and GRPO in the OPSD evaluation s
 Table~\ref{tab:stepwise_opd_results} shows that response-level OPD exceeds GRPO by 4.07, 9.79, and 8.34 points on AIME 2024, AIME 2025, and LiveCodeBench v6, respectively. SOD obtains 43.65, 38.33, and 37.88 on the three benchmarks, for an unweighted average of 39.95, the highest observed score on all three benchmarks. Relative to response-level OPD, the corresponding gains are 5.52, 2.29, and 7.61 points. Under this setup, the results are consistent with the intended role of step-wise weighting; they do not by themselves establish that every step-wise OPD method will outperform response-level OPD.
 
 \paragraph{Overall findings.}
-Across the three case studies, \textsc{EasyOPD} executes the evaluated methods through the same verl-based backend while preserving their distinct alignment, teacher-conditioning, and supervision-granularity requirements. The results should be interpreted within each setting rather than as a cross-regime ranking.
-
-\subsection{System Efficiency}
-\label{sec:exp_efficiency}
-
-To isolate the cost introduced by the \textsc{EasyOPD} dispatch layer, we run the same standard OPD method with identical model, batch size, and hardware, comparing a matched verl implementation with the \textsc{EasyOPD} path. Table~\ref{tab:system_efficiency} reports throughput, per-step time, peak memory, and wall-clock time, and separates the overhead into framework dispatch, teacher inference, and alignment or reward evaluation. \todo{The efficiency numbers below are placeholders and must be replaced with measured values before submission; if no matched measurement is available, this subsection and the overhead claim should be removed rather than estimated.}
-
-\begin{table}[t]
-    \centering
-    \small
-    \setlength{\tabcolsep}{4pt}
-    \renewcommand{\arraystretch}{1.15}
-    \caption{Matched comparison of a standard OPD method under a direct verl implementation and the \textsc{EasyOPD} path, using the same model, batch size, and hardware. \todo{All values are placeholders pending measurement.}}
-    \label{tab:system_efficiency}
-    \begin{tabular}{lcccc}
-        \toprule
-        Implementation & Tokens/s & Step (s) & Peak VRAM & Wall-clock \\
-        \midrule
-        Matched verl & \todo{--} & \todo{--} & \todo{--} & \todo{--} \\
-        \textsc{EasyOPD} & \todo{--} & \todo{--} & \todo{--} & \todo{--} \\
-        \bottomrule
-    \end{tabular}
-\end{table}
-
-\subsection{Extensibility Analysis}
-\label{sec:exp_extensibility}
-
-To characterize integration cost, we compare an alignment-heavy method (SimCT) and a step-heavy method (SOD). Table~\ref{tab:extensibility} reports, for each method, the number of shared dispatch sites it touches in the verl core, the method-local files, the method-specific lines of code, and the configuration size. All counts are taken from the released repository. The shared distillation hook layer is introduced once in a small, fixed set of core files (\texttt{verl/trainer/distillation/}, and the dispatch points in \texttt{ray\_trainer.py} and \texttt{dp\_actor.py}); each evaluated method then registers its loss and, where needed, adds a routing entry at these existing dispatch sites, while its supervision logic lives entirely in method-local modules.
-
-\begin{table}[t]
-    \centering
-    \small
-    \setlength{\tabcolsep}{4pt}
-    \renewcommand{\arraystretch}{1.15}
-    \caption{Per-method integration cost in \textsc{EasyOPD}. Core dispatch sites counts the shared-layer files a method adds a routing entry to; method-local files and lines of code are counted from the released method modules. The shared hook layer itself is introduced once and is not attributed to any single method.}
-    \label{tab:extensibility}
-    \begin{tabular}{lccc c}
-        \toprule
-        Method & \shortstack{Core dispatch\\sites} & \shortstack{Method-local\\files} & \shortstack{Added\\LOC} & Config \\
-        \midrule
-        SimCT & 3 & 3 & 868 & 57 \\
-        SOD & 2 & 3 & 438 & 64 \\
-        \bottomrule
-    \end{tabular}
-\end{table}
-
-For the evaluated methods, supervision logic is placed in three method-local files each (\texttt{\_\_init\_\_.py}, a hooks module, and a losses or core module), amounting to roughly 868 and 438 lines for SimCT and SOD, respectively, with 57 and 64 configuration lines. SimCT exercises cross-tokenizer alignment, the reused teacher sidecar, and the loss interface, while SOD exercises rollout metadata, the teacher sidecar, and the loss interface for step-level weighting. Adding a method thus concentrates almost all new code in method-local modules and reuses the existing shared dispatch layer rather than introducing new method-specific components across the core trainer and workers.
+Across the three case studies, \textsc{EasyOPD} executes the evaluated methods through the same verl-based backend while preserving their distinct alignment, teacher-conditioning, and supervision-granularity requirements, and the results should be read within each setting rather than as a cross-regime ranking.

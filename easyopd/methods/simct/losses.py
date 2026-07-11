@@ -226,7 +226,7 @@ def build_virtual_vocab_logits(
     For each segment the first logit position is projected to the shared
     overlap vocabulary. For **span segments** (where either side covers more
     than one token), an additional span dimension is appended whose value is
-    the **sum** of each token's logit for its own ground-truth id within the
+    the **mean** of each token's logit for its own ground-truth id within the
     span. The first token's overlap position is masked to ``-1e9`` to avoid
     double-counting it in both the overlap and the span dimension.
     """

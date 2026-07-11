@@ -52,6 +52,8 @@
 \usepackage{listings}
 \usepackage{xcolor}
 \usepackage{array}
+\usepackage{tcolorbox}
+\tcbuselibrary{skins}
 
 \usepackage{fontawesome5}
 \usepackage{booktabs}
@@ -166,10 +168,12 @@
 
 \begingroup
 \renewcommand{\thefootnote}{}
+\NoHyper
 \footnotetext{
 $^{*}$\,Equal Contribution.\quad
 $^{\dagger}$\,Corresponding Authors.\quad
 $^{\S}$\,Work done during internship at Tencent.}
+\endNoHyper
 \endgroup
 
 \input{chapters/0-abs}

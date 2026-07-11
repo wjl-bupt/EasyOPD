@@ -13,27 +13,38 @@ We summarize the optimization, sampling, and hardware settings for the three
 case studies. Unless noted otherwise, all settings are taken from the released
 configuration files and launch scripts.
 
+\paragraph{Software environment.}
+All experiments run on a node with $8\times$ NVIDIA H20 96GB GPUs
+(driver 535.161.08, CUDA 12.4) under Ubuntu 22.04, using the released
+\texttt{OpenAgentRL} conda environment (Python 3.11, PyTorch 2.6.0+cu124,
+verl 0.5.0, Ray 2.47.1, Transformers 4.51.1, vLLM 0.8.5.post1,
+SGLang 0.4.6.post1, FlashAttention 2.7.4.post1, and xFormers 0.0.29.post2).
+The full pinned dependency list and a one-click installer are released with the
+code.
+
 \paragraph{Cross-tokenizer OPD.}
 We distill Qwen2.5-7B-Instruct (vocabulary size 151{,}936) into a
 Phi-4-mini-Instruct student (3.8B, vocabulary size 200{,}064) that is first
 SFT-warm-started on a shared 10K mixed math-and-code corpus derived from the
 single-turn prompt--answer pairs of the \texttt{mixed\_math\_code\_10k} dataset.
-Training uses GRPO with a cross-tokenizer KL reward and a shared training-prompt
-set and optimization budget across all compared methods. Evaluation uses an
-SGLang-based inference server; we report exact-match accuracy for reasoning
-(verified with \texttt{math\_verify}) and pass@1 for code on GSM8K, MATH500,
-MBPP, and LiveCodeBench v6. Runs use $8\times$ NVIDIA H20 96GB GPUs.
-\todo{Exact learning rate, batch size, and training-step count to be confirmed
-against the final released run configuration.}
+Training uses GRPO with a cross-tokenizer KL reward, a learning rate of
+$5\times10^{-7}$ with a $0.05$ warmup ratio, a train batch size of $64$, one
+epoch ($154$ steps over the $\sim$9.9K training prompts), maximum prompt and
+response lengths of $4096$ tokens, and single-sample rollouts at temperature
+$0.6$. All compared methods share this training-prompt set and optimization
+budget. We save a checkpoint every $20$ steps and, after merging, evaluate each
+checkpoint with an SGLang-based inference server, reporting exact-match accuracy
+for reasoning (verified with \texttt{math\_verify}) and pass@1 for code on
+MATH500, GSM8K, MBPP, and LiveCodeBench v6.
 
 \paragraph{On-policy self-distillation.}
 SDPO uses Qwen3-8B as both the student and the self-teacher, with an EMA
 self-teacher (update rate $0.05$), top-$k$ logit distillation with $k=100$, and
-a symmetric KL interpolation ($\alpha=0.5$). We report the highest Average@16
-reached within one-hour and five-hour wall-clock budgets, where Average@16 is
-the mean correctness over 16 independently sampled responses per question. Runs
-use $8\times$ NVIDIA H20 96GB GPUs. \todo{Checkpoint-evaluation frequency and
-the selection rule for the reported budgets to be confirmed.}
+a symmetric KL interpolation ($\alpha=0.5$). Following the SDPO
+setup~\citep{hubotter2026sdpo}, we evaluate a checkpoint every five training
+steps and report the best Average@16 observed within the one-hour and five-hour
+wall-clock budgets, where Average@16 is the mean correctness over 16
+independently sampled responses per question.
 
 \paragraph{Step-wise OPD.}
 We use Qwen3-1.7B as the student and a GRPO-optimized Qwen3-4B as the teacher,
@@ -42,4 +53,43 @@ compared methods. Rollouts are multi-turn tool-interaction trajectories, and
 SOD applies step-wise adaptive weighting (with numerical-stability offset
 $\epsilon=10^{-6}$ and bound offset $\delta=0.2$) on top of the response-level
 OPD objective. Each benchmark score is Average@32 over 32 independently sampled
-responses per problem. Runs use $8\times$ NVIDIA H20 96GB GPUs.
+responses per problem.
+
+\section{Released Methods and Hooks}
+\label{app:method-hooks}
+
+Table~\ref{tab:method-hooks} lists the released methods used in this work and
+the dispatch hooks each one registers. Every method generates on-policy
+rollouts through verl's shared rollout engine; the hooks in the table are the
+\emph{additional} method-local extension points a method registers on top of
+this shared pipeline. Because a hook only routes data or control to a method
+module, a method activates only the hooks it needs: a logit-based objective
+such as GKD registers a single loss hook, whereas methods that require
+teacher-side computation or per-step trajectory metadata additionally register
+a teacher-sidecar or rollout-metadata hook. All other pipeline stages,
+including rollout generation, worker orchestration, and optimization, are
+reused from verl unchanged.
+
+\begin{table}[t]
+    \centering
+    \small
+    \setlength{\tabcolsep}{5pt}
+    \renewcommand{\arraystretch}{1.15}
+    \caption{Method-local dispatch hooks registered by each released method,
+    beyond the shared rollout--optimization pipeline that all methods reuse from
+    verl. \cmark\ marks an activated hook; the rollout-metadata hook attaches
+    per-step or trajectory annotations and is distinct from rollout generation
+    itself. Cross-tokenizer alignment in SimCT reuses the shared \texttt{simple}
+    teacher sidecar and is applied inside its loss path.}
+    \label{tab:method-hooks}
+    \begin{tabular}{lcccc}
+        \toprule
+        Method & Loss & \shortstack{Rollout\\meta.} & \shortstack{Teacher\\sidecar} & Setting \\
+        \midrule
+        GKD   & \cmark & \xmark & \xmark & Logit \\
+        SimCT & \cmark & \xmark & \cmark & Cross-tok. \\
+        SDPO  & \cmark & \xmark & \cmark & Self-distill. \\
+        SOD   & \cmark & \cmark & \xmark & Step-wise \\
+        \bottomrule
+    \end{tabular}
+\end{table}
