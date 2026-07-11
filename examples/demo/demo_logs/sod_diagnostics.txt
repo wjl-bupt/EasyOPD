@@ -1,0 +1,7 @@
+actor/ppo_kl:0.0
+actor/grad_norm:66.99197387695312
+actor/token_kl/mean:-0.4197485148906708
+actor/token_kl/max:14.024250030517578
+actor/token_kl/min:-34.06095886230469
+actor/token_kl/std:1.4431554079055786
+(TaskRunner pid=768416) Training Progress: 100%|██████████| 2/2 [17:52<00:00, 515.19s/it]Training Progress: 100%|██████████| 2/2 [17:52<00:00, 536.18s/it]

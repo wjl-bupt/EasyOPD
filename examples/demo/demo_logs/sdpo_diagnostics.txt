@@ -1,0 +1,8 @@
+pid=1087687) [EasyOPD:SDPO] building EMA self-teacher from: /root/workspace/models/runs/_cache/Qwen3-8B
+pid=1087687) WARNING:2026-07-11 11:32:19,407:[EasyOPD:sdpo][EMA-check] teacher=37 student=37 shared=37 teacher_only=0 student_only=0 shape_mismatch=0 | only_t=[] only_s=[] mism=[]
+self_distillation/reprompt_sample_fraction:0.125
+self_distillation/success_sample_fraction:0.125
+self_distillation/policy_fallback_fraction:0.875
+actor/sdpo/loss:0.004715669900178909
+actor/sdpo/num_distill_tokens:104.625
+actor/sdpo/teacher_fraction:0.25

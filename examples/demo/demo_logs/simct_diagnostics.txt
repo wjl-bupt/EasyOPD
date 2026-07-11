@@ -1,0 +1,9 @@
+(TaskRunner pid=1027612) [EasyOPD:simple] Cross-tokenizer teacher sidecar enabled for loss_mode=simct
+(WorkerDict pid=1039550) WARNING:2026-07-11 11:08:49,569:[EasyOPD:simple] loading teacher lm_head from /root/workspace/models/Qwen2.5-7B-Instruct onto cuda:0
+(WorkerDict pid=1039547) WARNING:2026-07-11 11:08:52,567:[EasyOPD:simple] loading teacher lm_head from /root/workspace/models/Qwen2.5-7B-Instruct onto cuda:0 [repeated 7x across cluster]
+simple/teacher_batch_size:8.0
+simple/teacher_loss_tokens_mean:397.75
+simct/xtok_kd_loss:0.0
+simct/xtok_kd_per_token_mean:0.0
+actor/grad_norm:5.25
+actor/lr:5e-07
