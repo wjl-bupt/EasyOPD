@@ -27,7 +27,10 @@ trap 'rc=$?; echo "[FATAL] launch.sh exited with code $rc at line $LINENO (last 
 # ============ Environment Setup ============
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export VLLM_USE_V1=1  # Required: enables vLLM V1 engine for async rollout
-export SANDBOX_FUSION_URL="https://YOUR_SANDBOX_FUSION_ENDPOINT/run_code"
+# Load local secrets/paths if present (.env at repo root, git-ignored).
+_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+[ -f "${_REPO_ROOT}/.env" ] && set -a && . "${_REPO_ROOT}/.env" && set +a
+export SANDBOX_FUSION_URL="${SANDBOX_FUSION_URL:-https://YOUR_SANDBOX_FUSION_ENDPOINT/run_code}"
 export TOKENIZERS_PARALLELISM=true
 export NCCL_DEBUG=WARN
 export HYDRA_FULL_ERROR=1

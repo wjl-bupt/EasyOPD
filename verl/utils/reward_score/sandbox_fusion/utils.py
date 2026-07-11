@@ -593,7 +593,7 @@ def check_correctness(
 
 if __name__ == "__main__":
     # print('test')
-    # sandbox_url = "https://sd2v9lhj0jcrt7o8n9asg.apigateway-cn-beijing.volceapi.com/run_code"
+    # sandbox_url = "https://YOUR_SANDBOX_FUSION_ENDPOINT/run_code"
     # input_output = """{"inputs": "['1']", "outputs": "['2024']"}"""
     # code_no_fn = "X = int(input())\n\ntotal_sum = 2025\n\ncount = 0\nfor i in range(1, 10):  # i from 1 to 9\n    if X % i == 0:  # i is a divisor of X\n        j = X // i\n        if 1 <= j <= 9:  # j must be between 1 and 9\n            count += 1\n\nresult = total_sum - count * X\n\nprint(result)\n"
     # result, metadata = check_correctness(

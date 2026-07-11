@@ -17,10 +17,17 @@
 
 set -e
 
+# ============ Local secrets / paths (optional) ============
+# Copy .env.example to .env at the repo root and fill in your real values
+# (sandbox URL, model/data paths). .env is git-ignored and never published.
+_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+[ -f "${_REPO_ROOT}/.env" ] && set -a && . "${_REPO_ROOT}/.env" && set +a
+
 # ============ Environment Setup ============
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export VLLM_USE_V1=1  # Required: enables vLLM V1 engine for async rollout
-export SANDBOX_FUSION_URL="https://YOUR_SANDBOX_FUSION_ENDPOINT/run_code"  # Required: sandbox API for code execution (used by rollout + evaluation)
+# Read from .env / environment; falls back to a placeholder you must replace.
+export SANDBOX_FUSION_URL="${SANDBOX_FUSION_URL:-https://YOUR_SANDBOX_FUSION_ENDPOINT/run_code}"
 
 # ============ Model Paths (MUST EDIT) ============
 # Student model: HuggingFace format SFT checkpoint to be trained

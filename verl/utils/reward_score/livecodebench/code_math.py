@@ -222,7 +222,7 @@ def compute_score(completion, test_cases, task=None, timeout=30, is_long_penalty
                     message = None
                     ## Add Sandbox Fusion API
                     metrics = check_correctness(
-sandbox_fusion_url=os.environ.get("SANDBOX_FUSION_URL", "https://sd72ileknjkrkkoplocgg.apigateway-cn-beijing.volceapi.com/run_code?faasInstanceName=vefaas-d2xrxq4u-lottx7z2gg-d8seq683lar58lbqp3q0-sandbox"),  # [EasyOPD] Added for SOD: read from env
+sandbox_fusion_url=os.environ.get("SANDBOX_FUSION_URL", "https://YOUR_SANDBOX_FUSION_ENDPOINT/run_code"),  # [EasyOPD] Added for SOD: read from env
                             in_outs={'inputs':["prefix"],"outputs":["prefix"]},
                             generation=cur_solution,
                             timeout=timeout
@@ -288,7 +288,7 @@ sandbox_fusion_url=os.environ.get("SANDBOX_FUSION_URL", "https://sd72ileknjkrkko
                 
             # Add Sandbox Fusion API
             metrics = check_correctness(
-sandbox_fusion_url=os.environ.get("SANDBOX_FUSION_URL", "https://sd72ileknjkrkkoplocgg.apigateway-cn-beijing.volceapi.com/run_code?faasInstanceName=vefaas-d2xrxq4u-lottx7z2gg-d8seq683lar58lbqp3q0-sandbox"),  # [EasyOPD] Added for SOD: read from env
+sandbox_fusion_url=os.environ.get("SANDBOX_FUSION_URL", "https://YOUR_SANDBOX_FUSION_ENDPOINT/run_code"),  # [EasyOPD] Added for SOD: read from env
                 in_outs=json.loads(json.dumps(test_cases)),
                 generation=solution,
                 timeout=timeout,
