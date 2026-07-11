@@ -137,8 +137,17 @@ outputs
 # codebuddy
 .codebuddy/
 
+# other AI-assistant tool residue (kept locally, not published)
+.codex/
+.gemini/
+.agent/
+
 # tmp analyze
 .tmp_analyze/
+
+# ad-hoc / scratch test scripts (not part of the released examples)
+/test_all_methods.sh
+/test_simct.sh
 
 # experiment data and models
 experiments/**/data*/
