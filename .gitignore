@@ -149,6 +149,9 @@ outputs
 /test_all_methods.sh
 /test_simct.sh
 
+# paper sources (kept locally, not published in the code repo)
+/latex/
+
 # experiment data and models
 experiments/**/data*/
 experiments/**/eval_data/
