@@ -1,7 +1,7 @@
-% Figure 2: EasyOPD running example (SimCT). All API calls, field names, the
-% launch command, and the diagnostic metric names are copied from the released
-% repository (easyopd/__init__.py, easyopd/config/simct.yaml,
-% examples/simct/run_simct.sh, and easyopd/methods/simct/losses.py).
+% Figure 2: EasyOPD running example. All API calls, method names, config
+% paths, launch scripts, and diagnostic metric names are copied from the
+% released repository (easyopd/__init__.py, easyopd/config/{simct,sdpo,sod}.yaml,
+% examples/{simct,sdpo,sod}/run_*.sh, and the per-method losses).
 \definecolor{cmtgray}{HTML}{6E7781}
 \definecolor{kwblue}{HTML}{0B5FA5}
 \definecolor{strgreen}{HTML}{0B6E4F}
@@ -16,40 +16,38 @@
     columns=fullflexible,
     keepspaces=true,
     showstringspaces=false,
-    aboveskip=2pt, belowskip=2pt,
+    aboveskip=1pt, belowskip=1pt,
 }
 
-\begin{figure}[t]
+\begin{figure*}[t]
     \centering
     \begin{tcolorbox}[colback=black!2, colframe=black!45, boxrule=0.6pt,
-                      arc=3pt, left=5pt, right=5pt, top=4pt, bottom=4pt,
-                      title=\footnotesize\textbf{Launching cross-tokenizer OPD (SimCT) with \textsc{EasyOPD}}]
+                      arc=3pt, left=5pt, right=5pt, top=2pt, bottom=2pt,
+                      title=\footnotesize\textbf{One entry point for every OPD setting in \textsc{EasyOPD}}]
     \begin{lstlisting}[style=easyopd,language=Python,
         morekeywords={from,import,print}]
 from easyopd import EasyOPD
-
-# 1. Discover released methods, then load one with its YAML config.
-print(EasyOPD.list_methods())        # [..., 'simct', 'sdpo', 'sod', ...]
-method = EasyOPD.from_hparams(
-    "simct", 
-    config_path="easyopd/config/simct.yaml",
-    student_model_path="google/gemma-2-2b",
-    teacher_model_path="Qwen/Qwen2.5-7B-Instruct",
-)
+print(EasyOPD.list_methods())   # [..., 'simct','uld','alm','dskd','sdpo','sod', ...]
+# The SAME call selects any method; only the name + YAML change.
+m = EasyOPD.from_hparams("simct", config_path="easyopd/config/simct.yaml")  # cross-tokenizer OPD (uld|alm|dskd)
+m = EasyOPD.from_hparams("sdpo",  config_path="easyopd/config/sdpo.yaml")   # on-policy self-distillation (vs grpo)
+m = EasyOPD.from_hparams("sod",   config_path="easyopd/config/sod.yaml")    # step-wise OPD (vs response-level opd, grpo)
     \end{lstlisting}
     \hrule height 0.3pt
-    \vspace{2pt}
     \begin{lstlisting}[style=easyopd,language=bash]
-# 2. Launch training; the config alone selects the method and its hooks.
-$ bash examples/simct/run_simct.sh
+# Each method (and its baselines) is one launch script; the config selects the method and the hooks it activates.
+$ bash examples/simct/run_simct.sh   # cross-tokenizer: uld|alm|dskd
+$ bash examples/sdpo/run_sdpo.sh     # self-distillation: grpo
+$ bash examples/sod/run_sod.sh       # step-wise: response-level opd, grpo
     \end{lstlisting}
     \hrule height 0.3pt
-    \vspace{2pt}
     \begin{lstlisting}[style=easyopd,language=]
-# 3. EasyOPD activates only the hooks SimCT needs (cross-tokenizer
-#    alignment + teacher sidecar + loss) and logs diagnostics
+# The registry activates only the hooks a method needs and logs supervision-specific diagnostics:
+#   simct -> alignment + teacher sidecar + loss  : simct/xtok_kd_loss, simple/teacher_loss_tokens_mean
+#   sdpo  -> reprompt self-teacher + loss        : actor/sdpo/loss, self_distillation/reprompt_sample_fraction
+#   sod   -> step-wise KL reweighting            : actor/token_kl, stepwise_opd_coef
     \end{lstlisting}
     \end{tcolorbox}
-    \caption{A running example of launching cross-tokenizer OPD with \textsc{EasyOPD}. A released method is loaded through the Python API or selected by a single launch script; the registry activates only the hooks the method needs, verl performs rollout and optimization, and \textsc{EasyOPD} reports supervision-specific diagnostics. The API calls, launch command, and diagnostic metric names are taken from the released repository.}
+    \caption{A running example of \textsc{EasyOPD}. The three studied settings---cross-tokenizer OPD, on-policy self-distillation, and step-wise OPD---and their baselines are all reached through the \emph{same} \texttt{from\_hparams} entry point or a single launch script, changing only the method name and its YAML config. The registry then activates only the hooks each method needs, verl performs rollout and optimization, and \textsc{EasyOPD} reports supervision-specific diagnostics. All API calls, method names, launch commands, and diagnostic metric names are taken from the released repository.}
     \label{fig:running_example}
-\end{figure}
+\end{figure*}
