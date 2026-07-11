@@ -6,13 +6,13 @@ set -euo pipefail
 # ==============================================================================
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-LOG_DIR="/apdcephfs_cq8/share_1324356/shinejiesun/eval_logs"
+LOG_DIR="/path/to/workspace/eval_logs"
 mkdir -p "${LOG_DIR}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
-EXP_DIR="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/01_cross_tokenizer_opd"
-RUNS_ROOT="/root/workspace/models/runs"
+EXP_DIR="/path/to/EasyOPD/experiments/01_cross_tokenizer_opd"
+RUNS_ROOT="/path/to/models/runs"
 EXP_NAME="01_cross_tokenizer_opd"
 
 PYTHON="/opt/conda/envs/OpenAgentRL-sj/bin/python"

@@ -27,7 +27,7 @@ set -euo pipefail
 #   - Output: teacher_sft_train.parquet in train_data/
 # ============================================================
 
-export PYTHONPATH="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD:${PYTHONPATH:-}"
+export PYTHONPATH="/path/to/EasyOPD:${PYTHONPATH:-}"
 export TOKENIZERS_PARALLELISM=true
 export NCCL_DEBUG=WARN
 export HYDRA_FULL_ERROR=1
@@ -35,13 +35,13 @@ export HYDRA_FULL_ERROR=1
 PYTHON="/opt/conda/envs/OpenAgentRL-sj/bin/python"
 
 # Paths
-EASYOPD_ROOT="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD"
+EASYOPD_ROOT="/path/to/EasyOPD"
 EXPERIMENT_DIR="${EASYOPD_ROOT}/experiments"
 EXP_DIR="${EXPERIMENT_DIR}/01_cross_tokenizer_opd"
 SHARED_SCRIPTS="${EXPERIMENT_DIR}/_shared/scripts"
 METHOD_DIR="${EXP_DIR}/methods/sft"
 
-STUDENT_MODEL="/root/workspace/models/Phi-4-mini-instruct"
+STUDENT_MODEL="/path/to/models/Phi-4-mini-instruct"
 TRAIN_DATA_DIR="${EXP_DIR}/train_data"
 SFT_TRAIN_PARQUET="${TRAIN_DATA_DIR}/teacher_sft_train.parquet"
 
@@ -52,7 +52,7 @@ EXP_NAME="01_cross_tokenizer_opd"
 METHOD="sft"
 RUN_NAME="sft_phi4mini"
 
-RUNS_ROOT="/root/workspace/models/runs"
+RUNS_ROOT="/path/to/models/runs"
 RUN_DIR="${RUNS_ROOT}/${EXP_NAME}/${METHOD}/${RUN_NAME}"
 FSDP_CKPT_DIR="${RUN_DIR}/fsdp"
 HF_CKPT_DIR="${RUN_DIR}/hf"

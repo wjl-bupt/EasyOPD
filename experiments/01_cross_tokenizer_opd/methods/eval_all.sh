@@ -45,9 +45,9 @@ export LD_LIBRARY_PATH="${SITE_PACKAGES}/nvidia/cu13/lib:${SITE_PACKAGES}/nvidia
 echo "Using Python: ${PYTHON}"
 
 # Shared paths
-EVAL_SCRIPT="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/_shared/scripts/evaluate_model_sglang.py"
-DATA_DIR="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/_shared/eval_data"
-METHODS_DIR="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/01_cross_tokenizer_opd/methods"
+EVAL_SCRIPT="/path/to/EasyOPD/experiments/_shared/scripts/evaluate_model_sglang.py"
+DATA_DIR="/path/to/EasyOPD/experiments/_shared/eval_data"
+METHODS_DIR="/path/to/EasyOPD/experiments/01_cross_tokenizer_opd/methods"
 
 # Server config
 PORT=30000
@@ -87,8 +87,8 @@ fi
 # TAG is the unique identifier for this model's results
 # MODEL_PATH is the local path to the HF model
 
-MODELS_BASE="/root/workspace/models"
-MODELS_RUNS="/root/workspace/models/runs/01_cross_tokenizer_opd"
+MODELS_BASE="/path/to/models"
+MODELS_RUNS="/path/to/models/runs/01_cross_tokenizer_opd"
 
 MODELS=(
     # Base models

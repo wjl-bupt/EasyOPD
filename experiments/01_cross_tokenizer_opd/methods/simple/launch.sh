@@ -52,7 +52,7 @@ trap 'rc=$?; echo "[FATAL] launch.sh exited with code $rc at line $LINENO (last 
 # itself OOMs, keep param_offload/optimizer_offload True (already default).
 # ============================================================
 
-export PYTHONPATH="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD:${PYTHONPATH:-}"
+export PYTHONPATH="/path/to/EasyOPD:${PYTHONPATH:-}"
 export TOKENIZERS_PARALLELISM=true
 export NCCL_DEBUG=WARN
 export HYDRA_FULL_ERROR=1
@@ -78,7 +78,7 @@ RAY_NUM_CPUS="${RAY_NUM_CPUS:-32}"
 RAY_READY_RETRIES="${RAY_READY_RETRIES:-12}"
 
 # ----------------- Paths -----------------
-EASYOPD_ROOT="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD"
+EASYOPD_ROOT="/path/to/EasyOPD"
 EXPERIMENT_DIR="${EASYOPD_ROOT}/experiments"
 EXP_DIR="${EXPERIMENT_DIR}/01_cross_tokenizer_opd"
 SHARED_SCRIPTS="${EXPERIMENT_DIR}/_shared/scripts"
@@ -92,9 +92,9 @@ mkdir -p "${RESULTS_DIR}"
 # HF dirs:
 #   .../hf/global_step_78/   <- mid-epoch ckpt (this one, used as RL start)
 #   .../hf/global_step_156/  <- final ckpt
-STUDENT_MODEL="/root/workspace/models/runs/01_cross_tokenizer_opd/sft/sft_phi4mini/hf/global_step_116"
+STUDENT_MODEL="/path/to/models/runs/01_cross_tokenizer_opd/sft/sft_phi4mini/hf/global_step_116"
 # Teacher = original Qwen2.5-7B-Instruct on local disk.
-TEACHER_MODEL="/root/workspace/models/Qwen2.5-7B-Instruct"
+TEACHER_MODEL="/path/to/models/Qwen2.5-7B-Instruct"
 
 # RL prompt data: experiment-level shared (simple/simct/uld/dskd... can reuse).
 TRAIN_DATA_DIR="${EXP_DIR}/train_data"
@@ -108,7 +108,7 @@ EXP_NAME="01_cross_tokenizer_opd"
 METHOD="simple"
 RUN_NAME="simple_phi4mini"
 
-RUNS_ROOT="/root/workspace/models/runs"
+RUNS_ROOT="/path/to/models/runs"
 RUN_DIR="${RUNS_ROOT}/${EXP_NAME}/${METHOD}/${RUN_NAME}"
 FSDP_CKPT_DIR="${RUN_DIR}/fsdp"
 HF_CKPT_DIR="${RUN_DIR}/hf"
@@ -307,7 +307,7 @@ import pandas as pd
 from datasets import load_from_disk
 from tqdm import tqdm
 
-DATASET_DIR = "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/dataset/mixed_math_code_10k"
+DATASET_DIR = "/path/to/workspace/workspace/dataset/mixed_math_code_10k"
 TRAIN_PATH = "${RL_TRAIN_PARQUET}"
 VAL_PATH = "${RL_VAL_PARQUET}"
 
@@ -367,7 +367,7 @@ if [ "${SKIP_RAY_RESTART:-0}" != "1" ]; then
     sleep 2
 
     # -- 2b. Start Ray fresh ------------------------------------------------
-    # NOTE: verl is editable-installed on NFS (/apdcephfs_cq8/...), so each Ray
+    # NOTE: verl is editable-installed on NFS (/path/to), so each Ray
     # worker takes 45+ seconds just to `import verl`. With many workers all
     # importing at once on NFS, the default 60s register timeout is far from
     # enough. Bump RAY_worker_register_timeout_seconds and the health-check

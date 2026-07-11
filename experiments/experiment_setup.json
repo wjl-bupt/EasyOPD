@@ -8,28 +8,28 @@
     "group_1_rl": {
       "description": "Pure RL methods (GRPO) - no distillation",
       "student": "Qwen2.5-1.5B-Instruct",
-      "student_path": "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/models/Qwen2.5-1.5B-Instruct",
+      "student_path": "/path/to/workspace/workspace/models/Qwen2.5-1.5B-Instruct",
       "student_params": "1.5B",
       "teacher": "None (self-play with reward only)"
     },
     "group_2_same_tokenizer_kd": {
       "description": "Same-tokenizer distillation (GKD, SOD, etc.) - NOT YET IMPLEMENTED in benchmark",
       "student": "Qwen2.5-1.5B-Instruct",
-      "student_path": "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/models/Qwen2.5-1.5B-Instruct",
+      "student_path": "/path/to/workspace/workspace/models/Qwen2.5-1.5B-Instruct",
       "student_params": "1.5B",
       "teacher": "Qwen2.5-7B-Instruct",
-      "teacher_path": "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/models/Qwen2.5-7B-Instruct",
+      "teacher_path": "/path/to/workspace/workspace/models/Qwen2.5-7B-Instruct",
       "teacher_params": "7B",
       "note": "Same tokenizer (Qwen2.5 family), teacher provides logits directly"
     },
     "group_3_cross_tokenizer_kd": {
       "description": "Cross-tokenizer distillation (Simple, SimCT) - different tokenizers",
       "student": "Phi-4-mini (SFT warmup checkpoint)",
-      "student_path": "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/KDFlow/output/ckpts/phi4-mini-sft-warmup-10k-qwen-lr2e-6/checkpoint-40",
+      "student_path": "/path/to/workspace/workspace/KDFlow/output/ckpts/phi4-mini-sft-warmup-10k-qwen-lr2e-6/checkpoint-40",
       "student_params": "3.8B",
       "student_vocab_size": 200064,
       "teacher": "Qwen2.5-7B-Instruct (via ref policy KL)",
-      "teacher_path": "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/models/Qwen2.5-7B-Instruct",
+      "teacher_path": "/path/to/workspace/workspace/models/Qwen2.5-7B-Instruct",
       "teacher_params": "7B",
       "teacher_vocab_size": 151936,
       "note": "Different tokenizers! Student=Phi-4-mini, Teacher=Qwen2.5-7B. KL divergence computed between student policy and ref policy (initial student weights)."
@@ -38,7 +38,7 @@
 
   "training_data": {
     "dataset": "mixed_math_code_10k",
-    "source": "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/dataset/mixed_math_code_10k",
+    "source": "/path/to/workspace/workspace/dataset/mixed_math_code_10k",
     "train_samples": 9950,
     "val_samples": 50,
     "composition": {"math": 2209, "code": 7691},

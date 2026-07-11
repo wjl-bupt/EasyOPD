@@ -1,13 +1,13 @@
 """Generate teacher responses using Qwen2.5-7B-Instruct for SFT training."""
 import os, sys, json, argparse
 import pandas as pd
-sys.path.insert(0, "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD")
+sys.path.insert(0, "/path/to/EasyOPD")
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--teacher_model", type=str, default="/root/workspace/models/Qwen2.5-7B-Instruct")
-    parser.add_argument("--data_path", type=str, default="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/benchmark/data_phi4mini/train.parquet")
-    parser.add_argument("--output_dir", type=str, default="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/benchmark/teacher_sft_data")
+    parser.add_argument("--teacher_model", type=str, default="/path/to/models/Qwen2.5-7B-Instruct")
+    parser.add_argument("--data_path", type=str, default="/path/to/EasyOPD/experiments/benchmark/data_phi4mini/train.parquet")
+    parser.add_argument("--output_dir", type=str, default="/path/to/EasyOPD/experiments/benchmark/teacher_sft_data")
     parser.add_argument("--max_samples", type=int, default=-1)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--max_tokens", type=int, default=2048)

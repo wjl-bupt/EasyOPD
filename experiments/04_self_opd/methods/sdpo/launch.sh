@@ -101,7 +101,7 @@ if [ -n "${_MISSING}" ]; then
 fi
 
 # ----------------- Paths -----------------
-EASYOPD_ROOT="${EASYOPD_ROOT:-/apdcephfs_cq8/share_1324356/gengshengli/EasyOPD}"
+EASYOPD_ROOT="${EASYOPD_ROOT:-/path/to/workspace/EasyOPD}"
 export PYTHONPATH="${EASYOPD_ROOT}:${PYTHONPATH:-}"
 EXPERIMENT_DIR="${EASYOPD_ROOT}/experiments"
 EXP_DIR="${EXPERIMENT_DIR}/04_self_opd"
@@ -115,7 +115,7 @@ mkdir -p "${RESULTS_DIR}"
 STUDENT_MODEL="${STUDENT_MODEL:-/root/models/Qwen3-8B}"
 
 # Raw dataset (shared) used to build the RL prompt parquet.
-RAW_DATASET_DIR="${RAW_DATASET_DIR:-/apdcephfs_cq8/share_1324356/shinejiesun/workspace/dataset/mixed_math_code_10k}"
+RAW_DATASET_DIR="${RAW_DATASET_DIR:-/path/to/workspace/workspace/dataset/mixed_math_code_10k}"
 
 TRAIN_DATA_DIR="${EXP_DIR}/train_data"
 
@@ -128,7 +128,7 @@ TRAIN_DATA_DIR="${EXP_DIR}/train_data"
 #   DATASET=gsm8k     -> grade-school MATH, \boxed{} answers (data_source=gsm8k).
 #   DATASET=default   -> math/code RL prompts built from RAW_DATASET_DIR (Step 1).
 DATASET="${DATASET:-default}"
-EVAL_DATA_DIR="${EVAL_DATA_DIR:-/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/_shared/eval_data}"
+EVAL_DATA_DIR="${EVAL_DATA_DIR:-/path/to/EasyOPD/experiments/_shared/eval_data}"
 if [ "${DATASET}" != "default" ]; then
     SDPO_TRAIN_PARQUET="${SDPO_TRAIN_PARQUET:-${TRAIN_DATA_DIR}/${DATASET}_train.parquet}"
     SDPO_VAL_PARQUET="${SDPO_VAL_PARQUET:-${TRAIN_DATA_DIR}/${DATASET}_val.parquet}"

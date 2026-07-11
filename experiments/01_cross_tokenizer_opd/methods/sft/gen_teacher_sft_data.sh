@@ -21,9 +21,9 @@ set -euo pipefail
 export SGLANG_DISABLE_CUDNN_CHECK=1
 
 # --- Configuration ---
-TEACHER_MODEL="/root/workspace/models/Qwen2.5-7B-Instruct"
-RAW_DATASET="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/dataset/mixed_math_code_10k_with_source"
-EASYOPD_ROOT="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD"
+TEACHER_MODEL="/path/to/models/Qwen2.5-7B-Instruct"
+RAW_DATASET="/path/to/workspace/workspace/dataset/mixed_math_code_10k_with_source"
+EASYOPD_ROOT="/path/to/EasyOPD"
 EXP_DIR="${EASYOPD_ROOT}/experiments/01_cross_tokenizer_opd"
 OUTPUT_PARQUET="${EXP_DIR}/train_data/teacher_sft_train.parquet"
 PYTHON="/opt/conda/envs/OpenAgentRL-sglang/bin/python"

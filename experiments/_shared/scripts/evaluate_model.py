@@ -24,7 +24,7 @@ multiprocessing.set_start_method("spawn", force=True)
 import pandas as pd
 
 # Add project root to path
-sys.path.insert(0, "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD")
+sys.path.insert(0, "/path/to/EasyOPD")
 
 from verl.utils.reward_score.math import compute_score as math_compute_score
 from verl.utils.reward_score.gsm8k import compute_score as gsm8k_compute_score
@@ -33,7 +33,7 @@ from verl.utils.reward_score.gsm8k import compute_score as gsm8k_compute_score
 # Default eval-data dir is shared across all methods/experiments.
 # Eval results are method-specific and MUST be passed in via --output_dir
 # (typically <experiment>/methods/<method>/results/).
-DATA_DIR = "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/_shared/eval_data"
+DATA_DIR = "/path/to/EasyOPD/experiments/_shared/eval_data"
 
 
 def evaluate_with_vllm(model_path: str, eval_data_path: str, benchmark_name: str,
@@ -50,7 +50,7 @@ def evaluate_with_vllm(model_path: str, eval_data_path: str, benchmark_name: str
 import os, sys, json, time
 os.environ["VLLM_USE_V1"] = "0"
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
-sys.path.insert(0, "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD")
+sys.path.insert(0, "/path/to/EasyOPD")
 
 import pandas as pd
 from vllm import LLM, SamplingParams

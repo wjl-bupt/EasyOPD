@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """SFT student model on teacher-generated responses using HuggingFace Trainer."""
 import os, sys, json, argparse
-sys.path.insert(0, "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD")
+sys.path.insert(0, "/path/to/EasyOPD")
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--student_model", default="/root/workspace/models/phi4-mini-sft-warmup-10k-qwen-lr2e-6/checkpoint-40")
-    parser.add_argument("--data_path", default="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/benchmark/teacher_sft_data/teacher_sft_train.jsonl")
-    parser.add_argument("--output_dir", default="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/benchmark/checkpoints/teacher_sft_phi4mini")
+    parser.add_argument("--student_model", default="/path/to/models/phi4-mini-sft-warmup-10k-qwen-lr2e-6/checkpoint-40")
+    parser.add_argument("--data_path", default="/path/to/EasyOPD/experiments/benchmark/teacher_sft_data/teacher_sft_train.jsonl")
+    parser.add_argument("--output_dir", default="/path/to/EasyOPD/experiments/benchmark/checkpoints/teacher_sft_phi4mini")
     parser.add_argument("--num_epochs", type=int, default=3)
     parser.add_argument("--lr", type=float, default=2e-5)
     parser.add_argument("--batch_size", type=int, default=4)

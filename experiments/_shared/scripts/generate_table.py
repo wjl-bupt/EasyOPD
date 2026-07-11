@@ -13,7 +13,7 @@ import json
 import os
 from pathlib import Path
 
-EXPERIMENTS_ROOT = "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments"
+EXPERIMENTS_ROOT = "/path/to/EasyOPD/experiments"
 
 # Expected methods in order
 METHODS = [

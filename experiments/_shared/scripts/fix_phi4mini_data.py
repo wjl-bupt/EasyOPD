@@ -1,6 +1,6 @@
 """Fix Phi-4-mini data: reward_model must be dict with ground_truth key."""
 import sys
-sys.path.insert(0, "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD")
+sys.path.insert(0, "/path/to/EasyOPD")
 
 from datasets import load_from_disk
 from transformers import AutoTokenizer
@@ -8,7 +8,7 @@ import pandas as pd
 import os
 
 # Load original dataset
-ds = load_from_disk('/apdcephfs_cq8/share_1324356/shinejiesun/workspace/dataset/mixed_math_code_10k')
+ds = load_from_disk('/path/to/workspace/workspace/dataset/mixed_math_code_10k')
 print(f"Dataset: {len(ds)} rows")
 
 # Prepare data with correct format
@@ -32,7 +32,7 @@ train_records = records[val_size:]
 val_records = records[:val_size]
 
 # Save
-output_dir = '/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/benchmark/data_phi4mini'
+output_dir = '/path/to/EasyOPD/experiments/benchmark/data_phi4mini'
 os.makedirs(output_dir, exist_ok=True)
 
 train_df = pd.DataFrame(train_records)

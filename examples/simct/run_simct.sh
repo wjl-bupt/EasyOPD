@@ -16,11 +16,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ---- shared paths (KDFlow-aligned) ----
 LOCAL_STUDENT_DIR=${LOCAL_STUDENT_DIR:-$HOME/workspace/models/phi4-mini-sft-warmup-10k-qwen-lr2e-6}
-REMOTE_STUDENT_DIR=${REMOTE_STUDENT_DIR:-/apdcephfs_cq8/share_1324356/shinejiesun/workspace/KDFlow/output/ckpts/phi4-mini-sft-warmup-10k-qwen-lr2e-6}
+REMOTE_STUDENT_DIR=${REMOTE_STUDENT_DIR:-/path/to/workspace/workspace/KDFlow/output/ckpts/phi4-mini-sft-warmup-10k-qwen-lr2e-6}
 LOCAL_TEACHER_DIR=${LOCAL_TEACHER_DIR:-$HOME/workspace/models/Qwen2.5-7B-Instruct}
-REMOTE_TEACHER_DIR=${REMOTE_TEACHER_DIR:-/apdcephfs_cq8/share_1324356/shinejiesun/workspace/models/Qwen2.5-7B-Instruct}
+REMOTE_TEACHER_DIR=${REMOTE_TEACHER_DIR:-/path/to/workspace/workspace/models/Qwen2.5-7B-Instruct}
 
-REMOTE_DATASET_DIR=${REMOTE_DATASET_DIR:-/apdcephfs_cq8/share_1324356/shinejiesun/workspace/dataset/mixed_math_code_10k}
+REMOTE_DATASET_DIR=${REMOTE_DATASET_DIR:-/path/to/workspace/workspace/dataset/mixed_math_code_10k}
 LOCAL_DATA_DIR=${LOCAL_DATA_DIR:-$HOME/data/mixed_math_code_10k}
 
 # ---- sync student checkpoint to local SSD (KDFlow parity) ----

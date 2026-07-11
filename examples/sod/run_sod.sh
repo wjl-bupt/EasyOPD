@@ -20,21 +20,21 @@ set -e
 # ============ Environment Setup ============
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export VLLM_USE_V1=1  # Required: enables vLLM V1 engine for async rollout
-export SANDBOX_FUSION_URL="https://sd72ileknjkrkkoplocgg.apigateway-cn-beijing.volceapi.com/run_code?faasInstanceName=vefaas-d2xrxq4u-lottx7z2gg-d8seq683lar58lbqp3q0-sandbox"  # Required: sandbox API for code execution (used by rollout + evaluation)
+export SANDBOX_FUSION_URL="https://YOUR_SANDBOX_FUSION_ENDPOINT/run_code"  # Required: sandbox API for code execution (used by rollout + evaluation)
 
 # ============ Model Paths (MUST EDIT) ============
 # Student model: HuggingFace format SFT checkpoint to be trained
-STUDENT_MODEL_PATH="/apdcephfs_cq8/share_1324356/qiyongzhong/checkpoint/qwen3_1p7b_sft/global_step_115/huggingface"
+STUDENT_MODEL_PATH="/path/to/workspace/checkpoint/qwen3_1p7b_sft/global_step_115/huggingface"
 # Teacher model: HuggingFace format teacher model for KL regularization
-TEACHER_MODEL_PATH="/apdcephfs_cq8/share_1324356/qiyongzhong/download_models/models--Gen-Verse--DemyAgent-4B/snapshots/6a097c80a5b60a106db46d9f72624988b078ad01"
+TEACHER_MODEL_PATH="/path/to/workspace/download_models/models--Gen-Verse--DemyAgent-4B/snapshots/6a097c80a5b60a106db46d9f72624988b078ad01"
 
 # ============ Dataset Paths (MUST EDIT) ============
-TRAIN_DATA="/apdcephfs_cq8/share_1324356/qiyongzhong/dataset/Gen-Verse/Open-AgentRL-30K/Open-AgentRL-30K.parquet"
-VAL_DATA_1="/apdcephfs_cq8/share_1324356/qiyongzhong/dataset/Gen-Verse/Open-AgentRL-Eval/aime2025/aime_2025_problems.parquet"
-VAL_DATA_2="/apdcephfs_cq8/share_1324356/qiyongzhong/dataset/Gen-Verse/Open-AgentRL-Eval/aime2024/aime_2024_problems.parquet"
+TRAIN_DATA="/path/to/workspace/dataset/Gen-Verse/Open-AgentRL-30K/Open-AgentRL-30K.parquet"
+VAL_DATA_1="/path/to/workspace/dataset/Gen-Verse/Open-AgentRL-Eval/aime2025/aime_2025_problems.parquet"
+VAL_DATA_2="/path/to/workspace/dataset/Gen-Verse/Open-AgentRL-Eval/aime2024/aime_2024_problems.parquet"
 
 # ============ Output Configuration ============
-SAVE_DIR="/apdcephfs_cq8/share_1324356/qiyongzhong/SOD_Merge_Framework/checkpoint/sod_easyopd_clone"
+SAVE_DIR="/path/to/workspace/SOD_Merge_Framework/checkpoint/sod_easyopd_clone"
 PROJECT_NAME="sod_easyopd_clone"
 EXPERIMENT_NAME="sod_easyopd_clone"
 

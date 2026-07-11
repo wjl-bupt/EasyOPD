@@ -22,8 +22,8 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 # ============ Configuration ============
-STUDENT_MODEL="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/models/Qwen2.5-1.5B-Instruct"
-TEACHER_MODEL="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/models/Qwen2.5-7B-Instruct"
+STUDENT_MODEL="/path/to/workspace/workspace/models/Qwen2.5-1.5B-Instruct"
+TEACHER_MODEL="/path/to/workspace/workspace/models/Qwen2.5-7B-Instruct"
 TRAIN_DATA="${PROJECT_ROOT}/test_data/train.parquet"
 VAL_DATA="${PROJECT_ROOT}/test_data/test.parquet"
 OUTPUT_DIR="/tmp/easyopd_real_test"
@@ -57,7 +57,7 @@ fi
 if [ ! -f "$TRAIN_DATA" ]; then
     echo "[test_real_training] Preparing parquet data..."
     python examples/simple/prepare_data.py \
-        --src /apdcephfs_cq8/share_1324356/shinejiesun/workspace/dataset/mixed_math_code_10k \
+        --src /path/to/workspace/workspace/dataset/mixed_math_code_10k \
         --dst "${PROJECT_ROOT}/test_data" \
         --val-size 50
 fi

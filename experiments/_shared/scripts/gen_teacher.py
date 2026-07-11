@@ -2,13 +2,13 @@
 """Generate teacher responses for SFT training."""
 import os, sys, json, argparse
 import pandas as pd
-sys.path.insert(0, "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD")
+sys.path.insert(0, "/path/to/EasyOPD")
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--teacher_model", default="/root/workspace/models/Qwen2.5-7B-Instruct")
-    parser.add_argument("--data_path", default="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/benchmark/data_phi4mini/train.parquet")
-    parser.add_argument("--output_dir", default="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/benchmark/teacher_sft_data")
+    parser.add_argument("--teacher_model", default="/path/to/models/Qwen2.5-7B-Instruct")
+    parser.add_argument("--data_path", default="/path/to/EasyOPD/experiments/benchmark/data_phi4mini/train.parquet")
+    parser.add_argument("--output_dir", default="/path/to/EasyOPD/experiments/benchmark/teacher_sft_data")
     parser.add_argument("--tp", type=int, default=4)
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)

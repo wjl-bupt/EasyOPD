@@ -29,7 +29,7 @@ from datasets import load_from_disk
 from tqdm.asyncio import tqdm_asyncio
 
 # Direct import of reward_score modules (avoid verl/__init__.py which needs tensordict)
-EASYOPD_ROOT = "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD"
+EASYOPD_ROOT = "/path/to/EasyOPD"
 
 def _load_module(name, path):
     spec = importlib.util.spec_from_file_location(name, path)

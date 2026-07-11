@@ -16,7 +16,7 @@ field can be picked up by reward implementations later, and tag every row with
 Usage::
 
     python prepare_data.py \
-        --src /apdcephfs_cq8/.../dataset/mixed_math_code_10k \
+        --src /path/to/dataset/mixed_math_code_10k \
         --dst ~/data/mixed_math_code_10k \
         --val-size 100
 """
@@ -34,7 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--src",
-        default="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/dataset/mixed_math_code_10k",
+        default="/path/to/workspace/workspace/dataset/mixed_math_code_10k",
         help="Source HF dataset directory (output of save_to_disk).",
     )
     parser.add_argument(

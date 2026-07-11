@@ -164,6 +164,7 @@ experiments/**/predictions.jsonl
 # experiment eval results and run outputs (kept locally, not published)
 experiments/**/results/
 experiments/**/results.back/
+experiments/**/results_*/
 experiments/**/*.back/
 experiments/**/*.bak.*
 experiments/**/*.parquet.bak.*

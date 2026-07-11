@@ -44,9 +44,9 @@ fi
 export LD_LIBRARY_PATH="${SITE_PACKAGES}/nvidia/cu13/lib:${SITE_PACKAGES}/nvidia/cuda_runtime/lib:${SITE_PACKAGES}/tvm_ffi/lib:${LD_LIBRARY_PATH:-}"
 echo "Using Python: ${PYTHON}"
 echo "Site-packages: ${SITE_PACKAGES}"
-EVAL_SCRIPT="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/_shared/scripts/evaluate_model_sglang.py"
-DATA_DIR="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/_shared/eval_data"
-METHODS_DIR="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/01_cross_tokenizer_opd/methods"
+EVAL_SCRIPT="/path/to/EasyOPD/experiments/_shared/scripts/evaluate_model_sglang.py"
+DATA_DIR="/path/to/EasyOPD/experiments/_shared/eval_data"
+METHODS_DIR="/path/to/EasyOPD/experiments/01_cross_tokenizer_opd/methods"
 
 PORT=30000
 BASE_URL="http://127.0.0.1:${PORT}"
@@ -82,58 +82,58 @@ fi
 
 MODELS=(
     # # SFT
-    # "sft:sft_phi4mini_global_step_78:/root/workspace/models/runs/01_cross_tokenizer_opd/sft/sft_phi4mini/hf/global_step_78"
-    # "sft:sft_phi4mini_global_step_156:/root/workspace/models/runs/01_cross_tokenizer_opd/sft/sft_phi4mini/hf/global_step_156"
+    # "sft:sft_phi4mini_global_step_78:/path/to/models/runs/01_cross_tokenizer_opd/sft/sft_phi4mini/hf/global_step_78"
+    # "sft:sft_phi4mini_global_step_156:/path/to/models/runs/01_cross_tokenizer_opd/sft/sft_phi4mini/hf/global_step_156"
 
     # # Simple
-    # "simple:simple_phi4mini_global_step_77:/root/workspace/models/runs/01_cross_tokenizer_opd/simple/simple_phi4mini/hf/global_step_77"
-    # "simple:simple_phi4mini_global_step_154:/root/workspace/models/runs/01_cross_tokenizer_opd/simple/simple_phi4mini/hf/global_step_154"
-    # "simple:simple_phi4mini_global_step_231:/root/workspace/models/runs/01_cross_tokenizer_opd/simple/simple_phi4mini/hf/global_step_231"
-    # "simple:simple_phi4mini_global_step_308:/root/workspace/models/runs/01_cross_tokenizer_opd/simple/simple_phi4mini/hf/global_step_308"
+    # "simple:simple_phi4mini_global_step_77:/path/to/models/runs/01_cross_tokenizer_opd/simple/simple_phi4mini/hf/global_step_77"
+    # "simple:simple_phi4mini_global_step_154:/path/to/models/runs/01_cross_tokenizer_opd/simple/simple_phi4mini/hf/global_step_154"
+    # "simple:simple_phi4mini_global_step_231:/path/to/models/runs/01_cross_tokenizer_opd/simple/simple_phi4mini/hf/global_step_231"
+    # "simple:simple_phi4mini_global_step_308:/path/to/models/runs/01_cross_tokenizer_opd/simple/simple_phi4mini/hf/global_step_308"
 
     # # SimCT
-    # "simct:simct_phi4mini_global_step_77:/root/workspace/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini/hf/global_step_77"
-    # "simct:simct_phi4mini_global_step_154:/root/workspace/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini/hf/global_step_154"
-    # "simct:simct_phi4mini_global_step_231:/root/workspace/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini/hf/global_step_231"
-    # "simct:simct_phi4mini_global_step_308:/root/workspace/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini/hf/global_step_308"
+    # "simct:simct_phi4mini_global_step_77:/path/to/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini/hf/global_step_77"
+    # "simct:simct_phi4mini_global_step_154:/path/to/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini/hf/global_step_154"
+    # "simct:simct_phi4mini_global_step_231:/path/to/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini/hf/global_step_231"
+    # "simct:simct_phi4mini_global_step_308:/path/to/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini/hf/global_step_308"
 
     # # SimCT v2
-    # "simct:simct_phi4mini_v2_global_step_77:/root/workspace/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini_v2/hf/global_step_77"
-    # "simct:simct_phi4mini_v2_global_step_154:/root/workspace/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini_v2/hf/global_step_154"
-    # "simct:simct_phi4mini_v2_global_step_231:/root/workspace/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini_v2/hf/global_step_231"
-    # "simct:simct_phi4mini_v2_global_step_308:/root/workspace/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini_v2/hf/global_step_308"
+    # "simct:simct_phi4mini_v2_global_step_77:/path/to/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini_v2/hf/global_step_77"
+    # "simct:simct_phi4mini_v2_global_step_154:/path/to/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini_v2/hf/global_step_154"
+    # "simct:simct_phi4mini_v2_global_step_231:/path/to/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini_v2/hf/global_step_231"
+    # "simct:simct_phi4mini_v2_global_step_308:/path/to/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini_v2/hf/global_step_308"
 
     # # SimCT v3
-    # "simct:simct_phi4mini_v3_global_step_77:/root/workspace/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini_v3/hf/global_step_77"
-    # "simct:simct_phi4mini_v3_global_step_154:/root/workspace/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini_v3/hf/global_step_154"
-    # "simct:simct_phi4mini_v3_global_step_231:/root/workspace/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini_v3/hf/global_step_231"
-    # "simct:simct_phi4mini_v3_global_step_308:/root/workspace/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini_v3/hf/global_step_308"
+    # "simct:simct_phi4mini_v3_global_step_77:/path/to/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini_v3/hf/global_step_77"
+    # "simct:simct_phi4mini_v3_global_step_154:/path/to/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini_v3/hf/global_step_154"
+    # "simct:simct_phi4mini_v3_global_step_231:/path/to/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini_v3/hf/global_step_231"
+    # "simct:simct_phi4mini_v3_global_step_308:/path/to/models/runs/01_cross_tokenizer_opd/simct/simct_phi4mini_v3/hf/global_step_308"
 
     # ALM
-    # "alm:alm_phi4mini_global_step_77:/root/workspace/models/runs/01_cross_tokenizer_opd/alm/alm_phi4mini/hf/global_step_77"
-    # "alm:alm_phi4mini_global_step_154:/root/workspace/models/runs/01_cross_tokenizer_opd/alm/alm_phi4mini/hf/global_step_154"
-    # "alm:alm_phi4mini_global_step_231:/root/workspace/models/runs/01_cross_tokenizer_opd/alm/alm_phi4mini/hf/global_step_231"
-    # "alm:alm_phi4mini_global_step_308:/root/workspace/models/runs/01_cross_tokenizer_opd/alm/alm_phi4mini/hf/global_step_308"
+    # "alm:alm_phi4mini_global_step_77:/path/to/models/runs/01_cross_tokenizer_opd/alm/alm_phi4mini/hf/global_step_77"
+    # "alm:alm_phi4mini_global_step_154:/path/to/models/runs/01_cross_tokenizer_opd/alm/alm_phi4mini/hf/global_step_154"
+    # "alm:alm_phi4mini_global_step_231:/path/to/models/runs/01_cross_tokenizer_opd/alm/alm_phi4mini/hf/global_step_231"
+    # "alm:alm_phi4mini_global_step_308:/path/to/models/runs/01_cross_tokenizer_opd/alm/alm_phi4mini/hf/global_step_308"
 
     # ULD
-    # "uld:uld_phi4mini_global_step_77:/root/workspace/models/runs/01_cross_tokenizer_opd/uld/uld_phi4mini/hf/global_step_77"
-    # "uld:uld_phi4mini_global_step_154:/root/workspace/models/runs/01_cross_tokenizer_opd/uld/uld_phi4mini/hf/global_step_154"
-    # "uld:uld_phi4mini_global_step_231:/root/workspace/models/runs/01_cross_tokenizer_opd/uld/uld_phi4mini/hf/global_step_231"
-    # "uld:uld_phi4mini_global_step_308:/root/workspace/models/runs/01_cross_tokenizer_opd/uld/uld_phi4mini/hf/global_step_308"
+    # "uld:uld_phi4mini_global_step_77:/path/to/models/runs/01_cross_tokenizer_opd/uld/uld_phi4mini/hf/global_step_77"
+    # "uld:uld_phi4mini_global_step_154:/path/to/models/runs/01_cross_tokenizer_opd/uld/uld_phi4mini/hf/global_step_154"
+    # "uld:uld_phi4mini_global_step_231:/path/to/models/runs/01_cross_tokenizer_opd/uld/uld_phi4mini/hf/global_step_231"
+    # "uld:uld_phi4mini_global_step_308:/path/to/models/runs/01_cross_tokenizer_opd/uld/uld_phi4mini/hf/global_step_308"
 
     # DSKD
-    # "dskd:dskd_phi4mini_global_step_77:/root/workspace/models/runs/01_cross_tokenizer_opd/dskd/dskd_phi4mini/hf/global_step_77"
-    # "dskd:dskd_phi4mini_global_step_154:/root/workspace/models/runs/01_cross_tokenizer_opd/dskd/dskd_phi4mini/hf/global_step_154"
-    # "dskd:dskd_phi4mini_global_step_231:/root/workspace/models/runs/01_cross_tokenizer_opd/dskd/dskd_phi4mini/hf/global_step_231"
-    # "dskd:dskd_phi4mini_global_step_308:/root/workspace/models/runs/01_cross_tokenizer_opd/dskd/dskd_phi4mini/hf/global_step_308"
+    # "dskd:dskd_phi4mini_global_step_77:/path/to/models/runs/01_cross_tokenizer_opd/dskd/dskd_phi4mini/hf/global_step_77"
+    # "dskd:dskd_phi4mini_global_step_154:/path/to/models/runs/01_cross_tokenizer_opd/dskd/dskd_phi4mini/hf/global_step_154"
+    # "dskd:dskd_phi4mini_global_step_231:/path/to/models/runs/01_cross_tokenizer_opd/dskd/dskd_phi4mini/hf/global_step_231"
+    # "dskd:dskd_phi4mini_global_step_308:/path/to/models/runs/01_cross_tokenizer_opd/dskd/dskd_phi4mini/hf/global_step_308"
 
     # Base models (control group)
-    "base:base_qwen25_7b:/root/workspace/models/Qwen2.5-7B-Instruct"
-    "base:base_phi4mini:/root/workspace/models/Phi-4-mini-instruct"
+    "base:base_qwen25_7b:/path/to/models/Qwen2.5-7B-Instruct"
+    "base:base_phi4mini:/path/to/models/Phi-4-mini-instruct"
 )
 
 # Dynamically discover SFT checkpoints from hf/ directory
-_SFT_HF_DIR="/root/workspace/models/runs/01_cross_tokenizer_opd/sft/sft_phi4mini/hf"
+_SFT_HF_DIR="/path/to/models/runs/01_cross_tokenizer_opd/sft/sft_phi4mini/hf"
 if [ -d "${_SFT_HF_DIR}" ]; then
     for _ckpt_dir in $(find "${_SFT_HF_DIR}" -maxdepth 1 -name "global_step_*" -type d | sort -t_ -k3 -n); do
         _step_name=$(basename "${_ckpt_dir}")

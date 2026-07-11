@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # =============================================================================
 # install_easyopd_env.sh
-# Adapted from shinejiesun's install_easyopd.sh for the gengshengli workspace.
+# Adapted from the original install_easyopd.sh for this workspace.
 #
 # This recreates the verified EasyOPD/verl training environment (vLLM + flash-attn)
-# that shinejiesun validated on the Cross-Tokenizer methods. Because SDPO shares
+# that the maintainer validated on the Cross-Tokenizer methods. Because SDPO shares
 # the same verl framework, is rollout-engine agnostic, and needs no extra deps,
 # this environment also runs SDPO.
 #
-# What was changed vs. the original (shinejiesun) script:
+# What was changed vs. the original script:
 #   - conda paths are derived from `conda info --base` (no hardcoded /opt/conda)
-#   - EASYOPD_ROOT / PYTHONPATH point to gengshengli's EasyOPD (has SDPO wiring)
-#   - REQUIREMENTS_FILE points at shinejiesun's full pip-freeze (absolute path)
+#   - EASYOPD_ROOT / PYTHONPATH point to this EasyOPD (has SDPO wiring)
+#   - REQUIREMENTS_FILE points at the original full pip-freeze (absolute path)
 #
 # Environment Summary (unchanged, validated):
 #   - Conda env name:  OpenAgentRL-sj
@@ -49,10 +49,10 @@ VERL_VERSION="0.5.0"
 # may not be installed yet on a fresh machine.
 
 # [CHANGED] Point at THIS workspace (so the env's PYTHONPATH gets the SDPO wiring)
-EASYOPD_ROOT="${EASYOPD_ROOT:-/apdcephfs_cq8/share_1324356/gengshengli/EasyOPD}"
+EASYOPD_ROOT="${EASYOPD_ROOT:-/path/to/workspace/EasyOPD}"
 
-# [CHANGED] Reuse shinejiesun's full, validated pip-freeze (absolute path on shared disk)
-REQUIREMENTS_FILE="${REQUIREMENTS_FILE:-/apdcephfs_cq8/share_1324356/shinejiesun/settings/install/easyopd_requirements.txt}"
+# [CHANGED] Reuse the original full, validated pip-freeze (absolute path on shared disk)
+REQUIREMENTS_FILE="${REQUIREMENTS_FILE:-/path/to/workspace/settings/install/easyopd_requirements.txt}"
 
 # PyPI mirror (Tencent, fast in China)
 MIRROR="https://mirrors.tencent.com/pypi/simple/"
@@ -66,7 +66,7 @@ if [[ "${1:-}" == "--force" ]] || [[ "${1:-}" == "-f" ]]; then
 fi
 
 echo "============================================================"
-echo "  EasyOPD Environment Installation (gengshengli adaptation)"
+echo "  EasyOPD Environment Installation (local adaptation)"
 echo "============================================================"
 echo "  Env name:       ${ENV_NAME}"
 echo "  PyTorch:        ${TORCH_VERSION}+${CUDA_TAG}"
@@ -230,7 +230,7 @@ ACTIVATE_SCRIPT="${CONDA_BASE}/envs/${ENV_NAME}/etc/conda/activate.d/easyopd.sh"
 mkdir -p "$(dirname "${ACTIVATE_SCRIPT}")"
 cat > "${ACTIVATE_SCRIPT}" << EOF
 #!/bin/bash
-# Auto-set EasyOPD PYTHONPATH on conda activate (gengshengli workspace)
+# Auto-set EasyOPD PYTHONPATH on conda activate (this workspace)
 export PYTHONPATH="${EASYOPD_ROOT}:\${PYTHONPATH:-}"
 export TOKENIZERS_PARALLELISM=true
 export NCCL_DEBUG=WARN

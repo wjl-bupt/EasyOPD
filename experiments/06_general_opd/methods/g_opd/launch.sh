@@ -30,7 +30,7 @@ trap 'rc=$?; echo "[FATAL] launch.sh exited with code $rc at line $LINENO (last 
 #   - ExOPD (lambda=1.25): A = -[(old - base) - lambda*(ref - base)]
 # ============================================================
 
-export PYTHONPATH="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD:${PYTHONPATH:-}"
+export PYTHONPATH="/path/to/EasyOPD:${PYTHONPATH:-}"
 export TOKENIZERS_PARALLELISM=true
 export NCCL_DEBUG=WARN
 export HYDRA_FULL_ERROR=1
@@ -51,7 +51,7 @@ RAY_NUM_CPUS="${RAY_NUM_CPUS:-32}"
 RAY_READY_RETRIES="${RAY_READY_RETRIES:-12}"
 
 # ----------------- Paths -----------------
-EASYOPD_ROOT="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD"
+EASYOPD_ROOT="/path/to/EasyOPD"
 EXPERIMENT_DIR="${EASYOPD_ROOT}/experiments"
 EXP_DIR="${EXPERIMENT_DIR}/06_general_opd"
 SHARED_SCRIPTS="${EXPERIMENT_DIR}/_shared/scripts"
@@ -61,11 +61,11 @@ RESULTS_DIR="${METHOD_DIR}/results"
 mkdir -p "${RESULTS_DIR}"
 
 # Student = Qwen2.5-1.5B-Instruct (same-tokenizer OPD starting point)
-STUDENT_MODEL="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/models/Qwen2.5-1.5B-Instruct"
+STUDENT_MODEL="/path/to/workspace/workspace/models/Qwen2.5-1.5B-Instruct"
 # Teacher = Qwen2.5-7B-Instruct (same tokenizer, larger model)
-TEACHER_MODEL="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/models/Qwen2.5-7B-Instruct"
+TEACHER_MODEL="/path/to/workspace/workspace/models/Qwen2.5-7B-Instruct"
 # Base model = Student's initial state (for reward normalization in ExOPD)
-BASE_MODEL="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/models/Qwen2.5-1.5B-Instruct"
+BASE_MODEL="/path/to/workspace/workspace/models/Qwen2.5-1.5B-Instruct"
 
 # RL prompt data
 TRAIN_DATA_DIR="${EXP_DIR}/train_data"
@@ -79,7 +79,7 @@ EXP_NAME="06_general_opd"
 METHOD="g_opd"
 RUN_NAME="g_opd_qwen25_1.5b"
 
-RUNS_ROOT="/root/workspace/models/runs"
+RUNS_ROOT="/path/to/models/runs"
 RUN_DIR="${RUNS_ROOT}/${EXP_NAME}/${METHOD}/${RUN_NAME}"
 FSDP_CKPT_DIR="${RUN_DIR}/fsdp"
 HF_CKPT_DIR="${RUN_DIR}/hf"
@@ -174,7 +174,7 @@ import pandas as pd
 from datasets import load_from_disk
 from tqdm import tqdm
 
-DATASET_DIR = "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/dataset/mixed_math_code_10k"
+DATASET_DIR = "/path/to/workspace/workspace/dataset/mixed_math_code_10k"
 TRAIN_PATH = "${RL_TRAIN_PARQUET}"
 VAL_PATH = "${RL_VAL_PARQUET}"
 

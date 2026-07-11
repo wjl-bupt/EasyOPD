@@ -7,17 +7,17 @@
 #   4. Retrain DSKD with OOM fix, then merge + evaluate
 #
 # Usage:
-#   nohup bash run_fix_and_eval.sh > /apdcephfs_cq8/share_1324356/shinejiesun/eval_logs/run_fix_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+#   nohup bash run_fix_and_eval.sh > /path/to/workspace/eval_logs/run_fix_$(date +%Y%m%d_%H%M%S).log 2>&1 &
 # ==============================================================================
 
 set -u
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-LOG_DIR="/apdcephfs_cq8/share_1324356/shinejiesun/eval_logs"
+LOG_DIR="/path/to/workspace/eval_logs"
 mkdir -p "${LOG_DIR}"
 
-EXP_DIR="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/01_cross_tokenizer_opd"
-RUNS_ROOT="/root/workspace/models/runs"
+EXP_DIR="/path/to/EasyOPD/experiments/01_cross_tokenizer_opd"
+RUNS_ROOT="/path/to/models/runs"
 EXP_NAME="01_cross_tokenizer_opd"
 
 log() {
@@ -46,12 +46,12 @@ ALM_METHOD_DIR="${EXP_DIR}/methods/alm"
 (
     cd "${ALM_METHOD_DIR}"
     # Source the variables we need from launch.sh without running the full script
-    export PYTHONPATH="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD:${PYTHONPATH:-}"
+    export PYTHONPATH="/path/to/EasyOPD:${PYTHONPATH:-}"
     PYTHON="/opt/conda/envs/OpenAgentRL-sj/bin/python"
-    SHARED_SCRIPTS="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/_shared/scripts"
-    STUDENT_MODEL="/root/workspace/models/runs/01_cross_tokenizer_opd/sft/sft_phi4mini/hf/global_step_116"
-    FSDP_CKPT_DIR="/root/workspace/models/runs/01_cross_tokenizer_opd/alm/alm_phi4mini/fsdp"
-    HF_CKPT_DIR="/root/workspace/models/runs/01_cross_tokenizer_opd/alm/alm_phi4mini/hf"
+    SHARED_SCRIPTS="/path/to/EasyOPD/experiments/_shared/scripts"
+    STUDENT_MODEL="/path/to/models/runs/01_cross_tokenizer_opd/sft/sft_phi4mini/hf/global_step_116"
+    FSDP_CKPT_DIR="/path/to/models/runs/01_cross_tokenizer_opd/alm/alm_phi4mini/fsdp"
+    HF_CKPT_DIR="/path/to/models/runs/01_cross_tokenizer_opd/alm/alm_phi4mini/hf"
     mkdir -p "${HF_CKPT_DIR}"
 
     shopt -s nullglob
@@ -88,13 +88,13 @@ log "Phase 2: ALM merge done."
 log "Phase 3: Evaluating ULD and ALM checkpoints..."
 
 PYTHON="/opt/conda/envs/OpenAgentRL-sj/bin/python"
-EVAL_SGLANG_SCRIPT="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/_shared/scripts/evaluate_model_sglang.py"
+EVAL_SGLANG_SCRIPT="/path/to/EasyOPD/experiments/_shared/scripts/evaluate_model_sglang.py"
 EVAL_PORT=30000
 EVAL_BASE_URL="http://127.0.0.1:${EVAL_PORT}"
 EVAL_TEMPERATURE=0.6
 EVAL_TOP_P=0.95
 EVAL_MAX_CONCURRENT=256
-EVAL_DATA_DIR="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/_shared/eval_data"
+EVAL_DATA_DIR="/path/to/EasyOPD/experiments/_shared/eval_data"
 
 declare -A BENCH_TOKENS
 BENCH_TOKENS[math500]=4096

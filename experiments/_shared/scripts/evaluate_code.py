@@ -24,10 +24,10 @@ os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 multiprocessing.set_start_method("spawn", force=True)
 
 # Add project root to path
-sys.path.insert(0, "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD")
+sys.path.insert(0, "/path/to/EasyOPD")
 
 # Default data dir
-DATA_DIR = "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/_shared/eval_data"
+DATA_DIR = "/path/to/EasyOPD/experiments/_shared/eval_data"
 
 
 # ============================================================================

@@ -3,7 +3,7 @@
 tools:
   - class_name: "examples.sod.reward.CustomSandboxFusionTool"
     config:
-      sandbox_fusion_url: "https://sd72ileknjkrkkoplocgg.apigateway-cn-beijing.volceapi.com/run_code?faasInstanceName=vefaas-d2xrxq4u-lottx7z2gg-d8seq683lar58lbqp3q0-sandbox"
+      sandbox_fusion_url: "https://YOUR_SANDBOX_FUSION_ENDPOINT/run_code"
       num_workers: 32
       enable_global_rate_limit: true
       rate_limit: 128

@@ -9,7 +9,7 @@ import sys
 import os
 
 # Add project root to path
-sys.path.insert(0, "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD")
+sys.path.insert(0, "/path/to/EasyOPD")
 
 from verl.utils.reward_score.math import compute_score as math_score
 from verl.utils.reward_score.gsm8k import compute_score as gsm8k_score

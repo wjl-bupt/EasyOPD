@@ -13,7 +13,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXP_DIR="$(dirname "${SCRIPT_DIR}")"
 SHARED_DIR="${EXP_DIR}/_shared"
-LOG_DIR="/apdcephfs_cq8/share_1324356/shinejiesun/eval_logs"
+LOG_DIR="/path/to/workspace/eval_logs"
 mkdir -p "${LOG_DIR}"
 
 TIMESTAMP=$(date '+%Y%m%d_%H%M%S')

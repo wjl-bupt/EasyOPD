@@ -27,7 +27,7 @@ trap 'rc=$?; echo "[FATAL] launch.sh exited with code $rc at line $LINENO (last 
 # ============ Environment Setup ============
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export VLLM_USE_V1=1  # Required: enables vLLM V1 engine for async rollout
-export SANDBOX_FUSION_URL="https://sd72ileknjkrkkoplocgg.apigateway-cn-beijing.volceapi.com/run_code?faasInstanceName=vefaas-d2xrxq4u-lottx7z2gg-d8seq683lar58lbqp3q0-sandbox"
+export SANDBOX_FUSION_URL="https://YOUR_SANDBOX_FUSION_ENDPOINT/run_code"
 export TOKENIZERS_PARALLELISM=true
 export NCCL_DEBUG=WARN
 export HYDRA_FULL_ERROR=1
@@ -38,7 +38,7 @@ RAY="/opt/conda/envs/OpenAgentRL/bin/ray"
 export PATH="/opt/conda/envs/OpenAgentRL/bin:${PATH}"
 
 # ----------------- Paths -----------------
-EASYOPD_ROOT="/apdcephfs_cq8/share_1324356/qiyongzhong/SOD_Merge_Framework/EasyOPD_clone"
+EASYOPD_ROOT="/path/to/workspace/SOD_Merge_Framework/EasyOPD_clone"
 EXP_DIR="${EASYOPD_ROOT}/experiments/02_agentic_opd"
 METHOD_DIR="${EXP_DIR}/methods/grpo"
 RESULTS_DIR="${METHOD_DIR}/results"
@@ -46,12 +46,12 @@ CKPT_DIR="${METHOD_DIR}/checkpoints"
 mkdir -p "${RESULTS_DIR}" "${CKPT_DIR}"
 
 # Model: Qwen3-1.7B-SFT (same starting point as SOD)
-MODEL="/apdcephfs_cq8/share_1324356/qiyongzhong/checkpoint/qwen3_1p7b_sft/global_step_115/huggingface"
+MODEL="/path/to/workspace/checkpoint/qwen3_1p7b_sft/global_step_115/huggingface"
 
 # Dataset (same as SOD)
-TRAIN_DATA="/apdcephfs_cq8/share_1324356/qiyongzhong/dataset/Gen-Verse/Open-AgentRL-30K/Open-AgentRL-30K.parquet"
-VAL_DATA_1="/apdcephfs_cq8/share_1324356/qiyongzhong/dataset/Gen-Verse/Open-AgentRL-Eval/aime2025/aime_2025_problems.parquet"
-VAL_DATA_2="/apdcephfs_cq8/share_1324356/qiyongzhong/dataset/Gen-Verse/Open-AgentRL-Eval/aime2024/aime_2024_problems.parquet"
+TRAIN_DATA="/path/to/workspace/dataset/Gen-Verse/Open-AgentRL-30K/Open-AgentRL-30K.parquet"
+VAL_DATA_1="/path/to/workspace/dataset/Gen-Verse/Open-AgentRL-Eval/aime2025/aime_2025_problems.parquet"
+VAL_DATA_2="/path/to/workspace/dataset/Gen-Verse/Open-AgentRL-Eval/aime2024/aime_2024_problems.parquet"
 
 # Output
 SAVE_DIR="${CKPT_DIR}/grpo_training"

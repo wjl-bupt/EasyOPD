@@ -17,7 +17,7 @@ set -xeuo pipefail
 
 # ============ Paths (sync student checkpoint to local SSD, like KDFlow) ============
 LOCAL_STUDENT_DIR=${LOCAL_STUDENT_DIR:-$HOME/workspace/models/phi4-mini-sft-warmup-10k-qwen-lr2e-6}
-REMOTE_STUDENT_DIR=${REMOTE_STUDENT_DIR:-/apdcephfs_cq8/share_1324356/shinejiesun/workspace/KDFlow/output/ckpts/phi4-mini-sft-warmup-10k-qwen-lr2e-6}
+REMOTE_STUDENT_DIR=${REMOTE_STUDENT_DIR:-/path/to/workspace/workspace/KDFlow/output/ckpts/phi4-mini-sft-warmup-10k-qwen-lr2e-6}
 STUDENT_CKPT_TAG=${STUDENT_CKPT_TAG:-checkpoint-40}
 
 if [ ! -d "${LOCAL_STUDENT_DIR}/${STUDENT_CKPT_TAG}" ]; then
@@ -29,7 +29,7 @@ if [ ! -d "${LOCAL_STUDENT_DIR}/${STUDENT_CKPT_TAG}" ]; then
 fi
 
 STUDENT_MODEL=${STUDENT_MODEL:-${LOCAL_STUDENT_DIR}/${STUDENT_CKPT_TAG}}
-TEACHER_MODEL=${TEACHER_MODEL:-/root/workspace/models/Qwen2.5-7B-Instruct}
+TEACHER_MODEL=${TEACHER_MODEL:-/path/to/models/Qwen2.5-7B-Instruct}
 
 # ============ Cluster ============
 NNODES=${NNODES:-1}

@@ -13,14 +13,14 @@ import pandas as pd
 from pathlib import Path
 
 # Paths
-DATASET_ROOT = "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/dataset"
+DATASET_ROOT = "/path/to/workspace/workspace/dataset"
 # Eval data is shared across all methods (math500/gsm8k/math_hard etc.)
-EVAL_DATA_DIR = "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/_shared/eval_data"
+EVAL_DATA_DIR = "/path/to/EasyOPD/experiments/_shared/eval_data"
 # Training data is method-specific; this is just a fallback dump location for
 # the legacy train/val/sft_train parquet (no longer used by the new SFT pipeline,
 # kept for backward compatibility of older scripts).
 TRAIN_DATA_DIR = EVAL_DATA_DIR  # same dir is fine; train.parquet & val.parquet just live alongside
-MODEL_PATH = "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/models/Qwen2.5-1.5B-Instruct"
+MODEL_PATH = "/path/to/workspace/workspace/models/Qwen2.5-1.5B-Instruct"
 
 os.makedirs(EVAL_DATA_DIR, exist_ok=True)
 

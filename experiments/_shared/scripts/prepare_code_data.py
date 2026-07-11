@@ -13,7 +13,7 @@ import sys
 import json
 import argparse
 
-DATA_DIR = "/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/_shared/eval_data"
+DATA_DIR = "/path/to/EasyOPD/experiments/_shared/eval_data"
 
 
 def prepare_mbpp(data_dir: str):

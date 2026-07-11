@@ -7,7 +7,7 @@
 # For each method: clean old checkpoints → train → merge FSDP→HF → evaluate.
 #
 # Usage:
-#   nohup bash run_all_methods.sh > /apdcephfs_cq8/share_1324356/shinejiesun/eval_logs/run_all_methods_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+#   nohup bash run_all_methods.sh > /path/to/workspace/eval_logs/run_all_methods_$(date +%Y%m%d_%H%M%S).log 2>&1 &
 #
 # ==============================================================================
 
@@ -15,14 +15,14 @@
 set -u
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-LOG_DIR="/apdcephfs_cq8/share_1324356/shinejiesun/eval_logs"
+LOG_DIR="/path/to/workspace/eval_logs"
 mkdir -p "${LOG_DIR}"
 
 MASTER_LOG="${LOG_DIR}/run_all_methods_${TIMESTAMP}.log"
 
 # Paths
-EXP_DIR="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD/experiments/01_cross_tokenizer_opd"
-RUNS_ROOT="/root/workspace/models/runs"
+EXP_DIR="/path/to/EasyOPD/experiments/01_cross_tokenizer_opd"
+RUNS_ROOT="/path/to/models/runs"
 EXP_NAME="01_cross_tokenizer_opd"
 
 # Methods to train in order

@@ -7,7 +7,7 @@
 
 set -uo pipefail
 
-PROJECT_ROOT="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/EasyOPD"
+PROJECT_ROOT="/path/to/EasyOPD"
 cd "$PROJECT_ROOT"
 
 export PYTHONPATH="$PROJECT_ROOT"
@@ -16,7 +16,7 @@ export HYDRA_FULL_ERROR=1
 export RAY_ADDRESS=auto
 
 PYTHON="/opt/conda/envs/OpenAgentRL-sj/bin/python"
-STUDENT="/apdcephfs_cq8/share_1324356/shinejiesun/workspace/models/Qwen2.5-1.5B-Instruct"
+STUDENT="/path/to/workspace/workspace/models/Qwen2.5-1.5B-Instruct"
 OUTPUT_BASE="/tmp/easyopd_real_test"
 RESULTS_FILE="${OUTPUT_BASE}/multi_method_results.txt"
 
