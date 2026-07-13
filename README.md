@@ -7,6 +7,15 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"></a>
 </p>
 
+<p align="center">
+  <a href="https://drive.google.com/file/d/1hgUeViTfSLEkAjsnj76PdLlgkBHRO-TS/view?usp=sharing">
+    <img src="assets/framework.png" alt="Watch the EasyOPD demo video" width="760"><br>
+    <img src="https://img.shields.io/badge/%E2%96%B6%20Watch-Demo%20Video-red?style=for-the-badge" alt="Watch demo video">
+  </a>
+</p>
+<p align="center"><sub>Click the image above to watch a short walkthrough of EasyOPD (hosted on Google Drive).</sub></p>
+
+
 **EasyOPD** is a unified, method-oriented framework for **On-Policy Distillation (OPD)** built on top of
 [verl](https://github.com/verl-project/verl). OPD methods differ widely in supervision form, tokenizer
 compatibility, teacher access, and supervision granularity, which usually leads to fragmented, hard-to-reproduce
