@@ -57,13 +57,13 @@ STD_NORM="${OPLD_STD_NORM:-false}"
 N_GPUS="${N_GPUS:-8}"
 NNODES="${NNODES:-1}"
 LR="${OPLD_LR:-1e-6}"
-TRAIN_BATCH_SIZE="${OPLD_TRAIN_BATCH_SIZE:-64}"
-PPO_MINI_BATCH_SIZE="${OPLD_PPO_MINI_BATCH_SIZE:-64}"
-MAX_PROMPT_LEN="${OPLD_MAX_PROMPT_LEN:-1024}"
-MAX_RESPONSE_LEN="${OPLD_MAX_RESPONSE_LEN:-2048}"
-PPO_MAX_TOKEN_LEN="${OPLD_PPO_MAX_TOKEN_LEN:-16384}"
+TRAIN_BATCH_SIZE="${OPLD_TRAIN_BATCH_SIZE:-256}"
+PPO_MINI_BATCH_SIZE="${OPLD_PPO_MINI_BATCH_SIZE:-128}"
+MAX_PROMPT_LEN="${OPLD_MAX_PROMPT_LEN:-2048}"
+MAX_RESPONSE_LEN="${OPLD_MAX_RESPONSE_LEN:-8192}"
+PPO_MAX_TOKEN_LEN="${OPLD_PPO_MAX_TOKEN_LEN:-32768}"
 ROLLOUT_TP="${OPLD_ROLLOUT_TP:-1}"
-GPU_MEM_UTIL="${OPLD_GPU_MEM_UTIL:-0.5}"
+GPU_MEM_UTIL="${OPLD_GPU_MEM_UTIL:-0.75}"
 TOTAL_EPOCHS="${OPLD_TOTAL_EPOCHS:-1}"
 
 # ---- logging ----
@@ -144,6 +144,7 @@ HYDRA_OVERRIDES=(
     "data.max_response_length=$MAX_RESPONSE_LEN"
     "data.filter_overlong_prompts=True"
     "data.truncation=error"
+    "data.apply_chat_template_kwargs.enable_thinking=False"
 
     # --- student model / actor -------------------------------------------
     "actor_rollout_ref.model.path=$STUDENT_MODEL"
@@ -156,6 +157,15 @@ HYDRA_OVERRIDES=(
     "actor_rollout_ref.actor.use_dynamic_bsz=True"
     "actor_rollout_ref.actor.ppo_max_token_len_per_gpu=$PPO_MAX_TOKEN_LEN"
     "actor_rollout_ref.actor.loss_agg_mode=token-mean"
+
+    "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=8"
+    "actor_rollout_ref.rollout.gpu_memory_utilization=0.65"
+    "actor_rollout_ref.rollout.max_num_batched_tokens=16384"
+    # "actor_rollout_ref.rollout.checkpoint_engine.update_weights_bucket_megabytes=4096"
+    "actor_rollout_ref.rollout.val_kwargs.do_sample=true"
+    "actor_rollout_ref.rollout.val_kwargs.temperature=1.0"
+    "actor_rollout_ref.rollout.val_kwargs.top_p=1.0"
+    "actor_rollout_ref.rollout.val_kwargs.n=8"
 
     # --- rollout: K candidates per prompt is the whole point --------------
     "actor_rollout_ref.rollout.name=vllm"
@@ -173,6 +183,9 @@ HYDRA_OVERRIDES=(
     "trainer.logger=[$LOGGER]"
     "trainer.n_gpus_per_node=$N_GPUS"
     "trainer.nnodes=$NNODES"
+    "trainer.val_before_train=true"
+    "trainer.test_freq=14"
+    "trainer.save_freq=-1"
     "trainer.total_epochs=$TOTAL_EPOCHS"
 )
 
