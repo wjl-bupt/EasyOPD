@@ -104,6 +104,7 @@ def __getattr__(name: str):
         "install_compute_advantage_patch",
         "OPLDMissingTeacherLogprobs",
         "OPLDMissingUID",
+        "OPLDConflictingKLTerm",
     }:
         from easyopd.methods.opld import advantage_estimator
 
@@ -122,4 +123,5 @@ __all__ = [
     "install_compute_advantage_patch",
     "OPLDMissingTeacherLogprobs",
     "OPLDMissingUID",
+    "OPLDConflictingKLTerm",
 ]

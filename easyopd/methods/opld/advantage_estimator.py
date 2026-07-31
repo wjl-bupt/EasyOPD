@@ -45,9 +45,16 @@ def get_last_metrics() -> dict[str, float]:
 
 # Teacher per-token logprob keys we know how to consume, in priority order.
 # All are (bsz, response_length), already aligned with ``response_mask``.
+#
+# ``ref_log_prob`` is the online route: point the ref worker at the teacher via
+# ``actor_rollout_ref.ref.model.path`` (fsdp_workers.py:673-680) and the frozen
+# "reference" forward *is* the teacher scoring the student's rollouts. It lands
+# on the batch at ray_trainer.py:2392, i.e. before compute_advantage (2484).
+# Listed last so an explicit teacher key always wins if both are present.
 _TEACHER_LOGPROB_KEYS = (
     "teacher_log_probs",       # lightning_opd offline parquet path
-    "opsa_teacher_log_probs",  # online frozen-ref forward path
+    "opsa_teacher_log_probs",  # OPSA online frozen-ref forward
+    "ref_log_prob",            # generic online teacher-as-ref路线
 )
 
 
@@ -131,6 +138,54 @@ def compute_listwise_advantage_estimator(
 _PATCHED = False
 
 
+class OPLDConflictingKLTerm(RuntimeError):
+    """Raised when another KL objective would corrupt the listwise advantage."""
+
+
+def _assert_no_conflicting_kl_term(algo_cfg) -> None:
+    """Fail loudly if some other KL objective is also active.
+
+    OPLD's advantage ``A_i = q_T(i) - q_S(i)`` *is* the gradient of the listwise
+    KL, so no additional KL term belongs in the objective. In particular, launch
+    scripts enable ``algorithm.token_kl_reg`` purely as a side channel to make
+    ``main_ppo.add_ref_policy_worker`` spawn the ref worker (which we repurpose as
+    the teacher). That is only safe while the regularizer stays inert -- if
+    ``beta_max`` is ever raised above ``beta_min`` it starts blending a token-level
+    ``ref_log_prob - old_log_probs`` signal into ``batch["advantages"]``
+    (ray_trainer.py:1714-1731) and silently corrupts our advantage.
+    """
+    if algo_cfg is None:
+        return
+
+    cfg = algo_cfg.get("token_kl_reg", None)
+    if cfg is None:
+        return
+
+    beta_max = cfg.get("beta_max", None) if hasattr(cfg, "get") else getattr(cfg, "beta_max", None)
+    beta_min = cfg.get("beta_min", 0.0) if hasattr(cfg, "get") else getattr(cfg, "beta_min", 0.0)
+    stepwise = (
+        cfg.get("stepwise_enable", False) if hasattr(cfg, "get")
+        else getattr(cfg, "stepwise_enable", False)
+    )
+
+    if stepwise:
+        raise OPLDConflictingKLTerm(
+            "algorithm.token_kl_reg.stepwise_enable=True is incompatible with "
+            "adv_estimator=listwise: the SOD branch overwrites batch['advantages'] "
+            "(ray_trainer.py:1640-1704). Set stepwise_enable=False."
+        )
+
+    if beta_max is not None and float(beta_max) > float(beta_min):
+        raise OPLDConflictingKLTerm(
+            f"algorithm.token_kl_reg is active (beta_max={beta_max} > beta_min={beta_min}) "
+            "alongside adv_estimator=listwise. It would blend a token-level KL signal "
+            "into the listwise advantage (ray_trainer.py:1714-1731). OPLD's advantage is "
+            "already the exact gradient of the listwise KL, so no extra KL term is "
+            "wanted. Leave beta_max unset (null) -- token_kl_reg.enable=True is only "
+            "used to make the ref worker spawn."
+        )
+
+
 def _compute_advantage_patched(original):
     """Wrap ``compute_advantage`` to inject OPLD's sequence-level tensors."""
 
@@ -138,6 +193,8 @@ def _compute_advantage_patched(original):
         name = getattr(adv_estimator, "value", adv_estimator)
         if name != ADV_ESTIMATOR_NAME:
             return original(data, adv_estimator, *args, **kwargs)
+
+        _assert_no_conflicting_kl_term(kwargs.get("config"))
 
         # verl's generic branch builds adv_kwargs itself and would drop anything
         # we add here, so reduce to sequence level and pass through meta_info-free
@@ -157,11 +214,16 @@ def _compute_advantage_patched(original):
         if teacher_token_logprobs is None:
             raise OPLDMissingTeacherLogprobs(
                 "adv_estimator=listwise found no teacher log-probabilities on the "
-                f"batch (looked for {list(_TEACHER_LOGPROB_KEYS)}). Note that "
-                "'opsa_teacher_log_probs' is attached *after* compute_advantage in "
-                "the current fit loop, so the offline 'teacher_log_probs' path is "
-                "the one that works out of the box."
+                f"batch (looked for {list(_TEACHER_LOGPROB_KEYS)}).\n"
+                "Online route:  point the ref worker at the teacher with\n"
+                "  actor_rollout_ref.ref.model.path=<TEACHER>\n"
+                "so 'ref_log_prob' is computed before compute_advantage.\n"
+                "Offline route: supply a parquet with a 'teacher_log_probs' column "
+                "(see easyopd.methods.lightning_opd.data_curation.prepare).\n"
+                "Note 'opsa_teacher_log_probs' is attached *after* compute_advantage "
+                "in the current fit loop and is therefore not usable here."
             )
+        logger.info("[EasyOPD:opld] using '%s' as the teacher logprob source", key)
 
         if teacher_token_logprobs.shape != response_mask.shape:
             raise ValueError(

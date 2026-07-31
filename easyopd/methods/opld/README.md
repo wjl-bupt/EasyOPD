@@ -303,6 +303,10 @@ $\log\pi/L$,严格推导下 $A_i$ 还应带 $1/L_i$ 因子。沿用"组内长度
 ### 12.7 配置示例
 
 ```yaml
+easyopd:
+  method:
+    name: listwise      # 必填!见下方说明
+
 algorithm:
   adv_estimator: listwise
   easyopd:
@@ -319,4 +323,23 @@ actor_rollout_ref:
 ```
 
 `rollout.n=1` 时超过 50% 的组退化会打 warning(§11.7 最后一条)。
+
+> **`easyopd.method.name: listwise` 不可省略。**
+> 注册链路是:`RayPPOTrainer.__init__`(ray_trainer.py:480)→
+> `HookDispatcher.from_config` → 仅当能从 config 解析出 method name 时才调
+> `ensure_discovered()`(hook_dispatch.py:128)→ import 本包 → 注册 estimator +
+> 装 patch。若只设 `algorithm.adv_estimator=listwise` 而不设 method name,
+> discovery 不触发,`get_adv_estimator_fn("listwise")` 会抛
+> `Unknown advantage estimator simply: listwise`。
+
+### 12.8 单测
+
+```bash
+pytest easyopd/methods/opld/test_core.py
+```
+
+纯 CPU,只依赖 torch + numpy,不需要 verl / ray / GPU。覆盖 §11.6 第 6 项:
+组内 mean-zero、$A_i=q_T-q_S$ 闭式、mask 正确性、单样本组退化、$\beta$ /
+`length_norm` / `eta` / `std_norm` 开关、反向 KL 不等于前向取负、配置错拼报错。
+
 
